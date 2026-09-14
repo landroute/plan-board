@@ -125,6 +125,11 @@ label.f{display:block;font-size:12px;color:var(--fg2);margin:12px 0 4px}
 }
 .btn.pri{background:var(--task-bg);color:var(--task-fg);border-color:var(--task-line);font-weight:600}
 .hint{font-size:12px;color:var(--fg3);line-height:1.5;margin-top:8px}
+.act{font-size:11px;color:var(--fg3);font-variant-numeric:tabular-nums;margin-top:3px}
+.sug{
+  display:inline-block;margin-top:5px;font-size:11px;padding:3px 9px;border-radius:6px;
+  background:var(--warn-bg);color:var(--warn-fg);font-variant-numeric:tabular-nums;cursor:pointer;
+}
 .empty{color:var(--fg3);font-size:13px;padding:20px 0;text-align:center}
 </style>
 </head>
@@ -166,12 +171,24 @@ label.f{display:block;font-size:12px;color:var(--fg2);margin:12px 0 4px}
     <input type="text" id="cfg-repo" placeholder="landroute/plan-data">
     <label class="f">GitHub トークン（fine-grained・plan-data のみ・Contents: Read and write）</label>
     <input type="password" id="cfg-token" placeholder="github_pat_...">
-    <label class="f">ntfy トピック（任意・Phase 5 で使用）</label>
+    <label class="f">ntfy トピック（予告通知。空なら通知しない）</label>
     <input type="text" id="cfg-ntfy" placeholder="長いランダム文字列">
-    <div style="display:flex;gap:8px;margin-top:16px">
+    <label class="f">何分前に鳴らすか</label>
+    <input type="number" id="cfg-before" value="5" min="1" max="60" step="1" style="width:110px">
+    <label class="row" style="cursor:pointer;margin-top:10px">
+      <input type="checkbox" id="cfg-include" style="width:auto;flex:none">
+      <div class="rtxt">通知にタスク本文を載せる</div>
+    </label>
+    <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap">
       <button class="btn pri" id="cfg-save">保存して読み込む</button>
+      <button class="btn" id="cfg-test">テスト通知</button>
       <button class="btn" id="cfg-clear">トークンを消す</button>
     </div>
+    <p class="hint">
+      ntfy.sh は第三者の公開サーバで、<b>トピック名を知っていれば誰でも購読できます</b>。
+      既定ではブロック名だけを送り、タスク本文は載せません。
+      トピックは推測されない長いランダム文字列にしてください。
+    </p>
     <p class="hint">
       トークンはこの端末のブラウザ内（localStorage）にのみ保存されます。
       <b>権限は plan-data だけ</b>に絞ってください。claude-tools には触れない設定にすること。
@@ -237,7 +254,8 @@ try{ Object.assign(cfg, JSON.parse(localStorage.getItem(CFG_KEY)||'{}')); }catch
 function saveCfg(){ try{ localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); }catch(e){} }
 
 /* ---------- 状態 ---------- */
-let plan=null, presets=null, shaPlan=null, dayOffset=0, dirty=false, saveTimer=null;
+let plan=null, presets=null, shaPlan=null, shaPresets=null, dayOffset=0, dirty=false, saveTimer=null;
+let timelogText='', shaTimelog=null, timelogDirty=false, currentCat=0;
 
 /* ---------- UTF-8 安全な base64 ---------- */
 function b64enc(str){
@@ -398,10 +416,21 @@ function openSheet(bi){
   document.getElementById('sheet').hidden=false;
 }
 function renderPresetList(ci){
+  currentCat=ci;
   const cat=((presets&&presets.categories)||[])[ci];
   document.getElementById('preset-list').innerHTML = cat
-    ? cat.presets.map(p=>'<div class="row" data-pick-preset="'+cat.id+'/'+p.id+'">'+
-        '<div class="rtxt">'+esc(p.text)+'</div><div class="rmin">'+p.min+'分</div></div>').join('')
+    ? cat.presets.map(function(p){
+        const id=cat.id+'/'+p.id, a=actualsFor(id), md=median(a);
+        let extra='';
+        if(md!=null){
+          // 3回以上たまり、目安と5分以上ずれたときだけ更新を提案する（自動では変えない）
+          extra = (a.length>=3 && Math.abs(md-p.min)>=5)
+            ? '<div class="sug" data-est="'+id+':'+md+'">実績 '+md+'分 · '+a.length+'回 → 目安を'+md+'分に？</div>'
+            : '<div class="act">実績 '+md+'分 · '+a.length+'回</div>';
+        }
+        return '<div class="row" data-pick-preset="'+id+'">'+
+          '<div class="rtxt">'+esc(p.text)+extra+'</div><div class="rmin">'+p.min+'分</div></div>';
+      }).join('')
     : '<div class="empty">型がありません</div>';
 }
 function closeSheet(){ document.getElementById('sheet').hidden=true; sheetTargetBlock=null; }
@@ -549,12 +578,138 @@ async function save(){
     setStatus('保存中…');
     plan.updatedAt=new Date().toISOString();
     shaPlan=await ghPut('plan.json', JSON.stringify(plan,null,2)+'\n', shaPlan, 'plan: 板から更新');
-    dirty=false; cacheLocal();
+    dirty=false;
+    if(timelogDirty){
+      shaTimelog=await ghPut('timelog.jsonl', timelogText, shaTimelog, 'timelog: 実績を追記');
+      timelogDirty=false;
+    }
+    cacheLocal();
     setStatus('保存済み '+new Date().toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'}));
+    await syncNotifications();
+    if(dirty) setTimeout(save, 200);   // 予約IDが付いたので、もう一度だけ保存する
   }catch(e){
     if(e.conflict) setStatus('他の端末で更新されています。再読み込みしてください', true);
     else setStatus(e.message, true);
   }
+}
+
+/* ---------- 実績（timelog.jsonl は追記のみ） ---------- */
+function appendTimelog(rec){
+  const nl = (timelogText && timelogText.slice(-1)!=='\n') ? '\n' : '';
+  timelogText = (timelogText||'') + nl + JSON.stringify(rec) + '\n';
+  timelogDirty=true;
+}
+function removeTimelog(atIso){
+  if(!timelogText) return;
+  const keep=timelogText.split('\n').filter(function(l){
+    if(!l.trim()) return false;
+    try{ return JSON.parse(l).at!==atIso; }catch(e){ return true; }
+  });
+  timelogText = keep.length ? keep.join('\n')+'\n' : '';
+  timelogDirty=true;
+}
+/* 開始 = 同じブロックで直前に完了したタスクの完了時刻。無ければブロック開始時刻 */
+function buildRecord(bi,ti){
+  if(dayOffset!==0) return null;               // 今日以外のタップは実測にならない
+  const v=blocksFor(dayOffset)[bi], b=storedBlock(bi), t=b.tasks[ti];
+  if(!t || !t.doneAt) return null;
+  let startMin=hm(v.s);
+  for(let j=0;j<ti;j++){
+    const p=b.tasks[j];
+    if(p && p.doneAt){ const pd=new Date(p.doneAt); startMin=Math.max(startMin, pd.getHours()*60+pd.getMinutes()); }
+  }
+  const d=new Date(t.doneAt);
+  const actual=(d.getHours()*60+d.getMinutes())-startMin;
+  if(actual<1 || actual>240) return null;      // 明らかに実測でないものは欠測として捨てる
+  return { at:t.doneAt, date:ymd(dateAt(0)), block:v.label,
+           preset:t.preset||null, text:t.text, est:t.min||0, actual:actual };
+}
+function actualsFor(presetId){
+  if(!timelogText || !presetId) return [];
+  const out=[];
+  const lines=timelogText.split('\n');
+  for(let i=0;i<lines.length;i++){
+    if(!lines[i].trim()) continue;
+    try{ const r=JSON.parse(lines[i]); if(r.preset===presetId && r.actual>0) out.push(r.actual); }catch(e){}
+  }
+  return out.slice(-7);
+}
+function median(a){
+  if(!a.length) return null;
+  const s=a.slice().sort(function(x,y){return x-y;}), m=Math.floor(s.length/2);
+  return s.length%2 ? s[m] : Math.round((s[m-1]+s[m])/2);
+}
+/* 目安は自動で書き換えない。承認されたときだけ presets.json を更新する */
+async function applyEstimate(presetId, minutes){
+  const parts=presetId.split('/');
+  const c=presets.categories.find(function(x){return x.id===parts[0];});
+  const p=c && c.presets.find(function(x){return x.id===parts[1];});
+  if(!p) return;
+  p.min=minutes;
+  try{
+    setStatus('目安を更新中…');
+    shaPresets=await ghPut('presets.json', JSON.stringify(presets,null,2)+'\n', shaPresets, 'presets: 実績から目安を更新');
+    setStatus('「'+p.text.slice(0,16)+'」の目安を '+minutes+'分 にしました');
+  }catch(e){ setStatus(e.message, true); }
+  renderPresetList(currentCat);
+}
+
+/* ---------- ntfy（予告の予約） ----------
+   板から直接予約するので、Surface が落ちていても鳴る。
+   予定が変わったら DELETE して貼り直す（ntfy は上限3日） */
+async function ntfyPublish(body){
+  const r=await fetch('https://ntfy.sh/', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
+  });
+  if(!r.ok) throw new Error('ntfy: HTTP '+r.status);
+  return r.json();
+}
+function ntfyDelete(id){
+  return fetch('https://ntfy.sh/'+encodeURIComponent(cfg.ntfy)+'/'+encodeURIComponent(id)+'/delete')
+    .catch(function(){});
+}
+function notifyFingerprint(){
+  const parts=[];
+  for(let off=0; off<3; off++){
+    const key=ymd(dateAt(off));
+    const bs=blocksFor(off);
+    for(let i=0;i<bs.length;i++){
+      const open=bs[i].tasks.find(function(t){return !t.done;});
+      if(open) parts.push(key+'|'+bs[i].label+'|'+bs[i].s+'|'+open.text);
+    }
+  }
+  return parts.join('~')+'|'+(cfg.notifyBefore||5)+'|'+(cfg.notifyIncludeTask?1:0);
+}
+async function syncNotifications(){
+  if(!cfg.ntfy) return;
+  const fp=notifyFingerprint();
+  if(fp===(plan.notifyFp||'')) return;
+  const old=plan.notify||[];
+  for(let i=0;i<old.length;i++) await ntfyDelete(old[i].id);
+  const made=[], before=Number(cfg.notifyBefore||5), now=Date.now();
+  for(let off=0; off<3; off++){
+    const d=dateAt(off), bs=blocksFor(off);
+    for(let i=0;i<bs.length;i++){
+      const b=bs[i];
+      const open=b.tasks.find(function(t){return !t.done;});
+      if(!open) continue;
+      const fire=new Date(d); fire.setHours(0,0,0,0); fire.setMinutes(hm(b.s)-before);
+      if(fire.getTime()<=now+15000) continue;                  // 過ぎている / 直近すぎる
+      if(fire.getTime()>now+3*86400000-60000) continue;        // ntfy の上限3日
+      try{
+        const res=await ntfyPublish({
+          topic:cfg.ntfy,
+          title:'もうすぐ '+b.label+'（'+b.s+'）',
+          message: cfg.notifyIncludeTask ? open.text : '次の1手はプランに入っています',
+          delay:String(Math.floor(fire.getTime()/1000)),
+          tags:['alarm_clock']
+        });
+        if(res && res.id) made.push({id:res.id, at:b.s, label:b.label, date:ymd(d)});
+      }catch(e){ setStatus('通知の予約に失敗: '+e.message, true); return; }
+    }
+  }
+  plan.notify=made; plan.notifyFp=fp; dirty=true;
+  setStatus('予告を '+made.length+'件 予約しました');
 }
 
 /* ---------- 読み込み ---------- */
@@ -562,15 +717,21 @@ async function loadAll(){
   if(!cfg.token){ setStatus('設定からトークンを入れてください', true); renderFromCache(); return; }
   try{
     setStatus('読み込み中…');
-    const res=await Promise.all([ghGet('plan.json'), ghGet('presets.json')]);
-    const p=res[0], pr=res[1];
+    const res=await Promise.all([ghGet('plan.json'), ghGet('presets.json'), ghGet('timelog.jsonl')]);
+    const p=res[0], pr=res[1], tl=res[2];
     if(p.missing){ plan={version:1,days:{},inbox:[]}; shaPlan=null; }
     else { plan=JSON.parse(p.text); shaPlan=p.sha; }
-    presets = pr.missing ? {bufferMin:5,categories:[]} : JSON.parse(pr.text);
+    if(pr.missing){ presets={bufferMin:5,categories:[]}; shaPresets=null; }
+    else { presets=JSON.parse(pr.text); shaPresets=pr.sha; }
+    if(tl.missing){ timelogText=''; shaTimelog=null; }
+    else { timelogText=tl.text; shaTimelog=tl.sha; }
+    timelogDirty=false;
     if(!plan.days) plan.days={};
     if(!plan.inbox) plan.inbox=[];
     dirty=false; cacheLocal(); render();
     setStatus('同期 '+new Date().toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'}));
+    // 設定変更（何分前・本文の有無）も指紋に入っているので、ここで貼り直しが走る
+    syncNotifications().then(function(){ if(dirty) save(); });
   }catch(e){
     setStatus(e.message+' — キャッシュを表示します', true);
     renderFromCache();
@@ -602,10 +763,17 @@ document.getElementById('timeline').addEventListener('click', function(e){
     const blocks=blocksFor(dayOffset), label=blocks[Number(t.dataset.b)].label;
     const day=materialize(dayOffset);
     const b=day.blocks.find(x=>String(x.label).toLowerCase()===label.toLowerCase());
-    const task=b && b.tasks[Number(t.dataset.t)];
+    const ti=Number(t.dataset.t), task=b && b.tasks[ti];
     if(task){
       task.done=!task.done;
-      if(task.done) task.doneAt=new Date().toISOString(); else delete task.doneAt;
+      if(task.done){
+        task.doneAt=new Date().toISOString();
+        const rec=buildRecord(Number(t.dataset.b), ti);
+        if(rec) appendTimelog(rec);          // 実測にならない回は記録しない（欠測）
+      }else{
+        const old=task.doneAt; delete task.doneAt;
+        if(old) removeTimelog(old);
+      }
       markDirty(); render();
     }
   }
@@ -644,6 +812,14 @@ document.getElementById('sheet').addEventListener('click', function(e){
     for(let i=0;i<all.length;i++) all[i].classList.remove('on');
     cat.classList.add('on'); renderPresetList(Number(cat.dataset.cat)); return;
   }
+  // 提案バッジは行より先に拾う（押しても配置してしまわないように）
+  const est=e.target.closest('[data-est]');
+  if(est){
+    e.stopPropagation();
+    const q=est.dataset.est, k=q.lastIndexOf(':');
+    applyEstimate(q.slice(0,k), Number(q.slice(k+1)));
+    return;
+  }
   const pp=e.target.closest('[data-pick-preset]');
   if(pp){
     const parts=pp.dataset.pickPreset.split('/');
@@ -674,7 +850,18 @@ document.getElementById('settings-btn').addEventListener('click', function(){
   document.getElementById('cfg-repo').value=cfg.repo||'';
   document.getElementById('cfg-token').value=cfg.token||'';
   document.getElementById('cfg-ntfy').value=cfg.ntfy||'';
+  document.getElementById('cfg-before').value=cfg.notifyBefore||5;
+  document.getElementById('cfg-include').checked=!!cfg.notifyIncludeTask;
   stEl.hidden=false;
+});
+document.getElementById('cfg-test').addEventListener('click', async function(){
+  const topic=document.getElementById('cfg-ntfy').value.trim();
+  if(!topic){ setStatus('先に ntfy トピックを入れてください', true); return; }
+  try{
+    await ntfyPublish({topic:topic, title:'板 — テスト通知', message:'この通知が届けば設定できています', tags:['white_check_mark']});
+    setStatus('テスト通知を送りました');
+  }catch(e){ setStatus(e.message, true); }
+  stEl.hidden=true;
 });
 document.getElementById('settings-close').addEventListener('click', function(){ stEl.hidden=true; });
 stEl.addEventListener('click', function(e){ if(e.target.id==='settings') stEl.hidden=true; });
@@ -682,6 +869,8 @@ document.getElementById('cfg-save').addEventListener('click', function(){
   cfg.repo=document.getElementById('cfg-repo').value.trim()||'landroute/plan-data';
   cfg.token=document.getElementById('cfg-token').value.trim();
   cfg.ntfy=document.getElementById('cfg-ntfy').value.trim();
+  cfg.notifyBefore=Math.max(1,Math.min(60,Number(document.getElementById('cfg-before').value)||5));
+  cfg.notifyIncludeTask=document.getElementById('cfg-include').checked;
   saveCfg(); stEl.hidden=true; loadAll();
 });
 document.getElementById('cfg-clear').addEventListener('click', function(){
