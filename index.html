@@ -53,7 +53,17 @@ header{
 main{padding:12px 12px 0}
 .block{margin-bottom:18px}
 .bhead{display:flex;align-items:baseline;gap:8px;margin-bottom:6px}
-.bname{font-size:13px;font-weight:600;color:var(--fg2)}
+.bname{
+  font-size:13px;font-weight:600;color:var(--fg2);background:transparent;border:0;
+  padding:2px 6px;margin-left:-6px;border-radius:6px;cursor:pointer;font-family:inherit;
+}
+.bname:active{background:var(--buf)}
+.more{
+  position:absolute;top:4px;right:4px;width:30px;height:26px;border:0;border-radius:6px;
+  background:transparent;color:var(--task-fg);opacity:.6;font-size:15px;cursor:pointer;line-height:1;
+}
+.more:active{background:rgba(0,0,0,.2)}
+.lead{background:var(--buf);border-radius:6px;margin:3px 0;border-left:3px solid var(--line2)}
 .btime{font-size:12px;color:var(--fg3);font-variant-numeric:tabular-nums}
 .bfree{margin-left:auto;font-size:11px;color:var(--fg3)}
 .bfree.over{color:var(--warn-fg);background:var(--warn-bg);padding:1px 7px;border-radius:6px}
@@ -315,15 +325,18 @@ function renderTimeline(){
 
   el.innerHTML=blocks.map((b,bi)=>{
     const s=hm(b.s), e=hm(b.e), dur=Math.max(1,e-s);
-    const used=b.tasks.reduce((a,t)=>a+(t.min||0),0) + buf*b.tasks.length;
+    const used=b.tasks.reduce((a,t)=>a+(t.min||0)+(t.lead||0),0) + buf*b.tasks.length;
     const free=dur-used;
 
     let body='';
     for(let ti=0; ti<b.tasks.length; ti++){
       const t=b.tasks[ti];
+      // lead = そのタスクの前に明示的に空けた時間。バッファと同じ見た目だが左に印を付ける
+      if(t.lead) body+='<div class="lead" style="height:'+Math.max(8,t.lead*PX_PER_MIN)+'px"></div>';
       const h=Math.max(MIN_CARD_H,(t.min||0)*PX_PER_MIN);
       body+='<div class="task '+(t.done?'done':'')+'" style="min-height:'+h+'px" data-b="'+bi+'" data-t="'+ti+'">'+
-            '<div class="ttxt">'+esc(t.text)+'</div><div class="tmin">'+(t.min||0)+'分</div></div>';
+            '<div class="ttxt">'+esc(t.text)+'</div><div class="tmin">'+(t.min||0)+'分</div>'+
+            '<button class="more" data-more="'+bi+':'+ti+'" aria-label="操作">&#8943;</button></div>';
       body+='<div class="buf" style="height:'+Math.max(6,buf*PX_PER_MIN)+'px"></div>';
     }
     // 余白帯は上限を設ける（長い空きが画面を占有しても読み取れる情報は増えないため）
@@ -335,7 +348,7 @@ function renderTimeline(){
       nowline='<div class="nowline" style="top:'+(((nm-s)/dur)*100)+'%"><span>'+fmt(nm)+'</span></div>';
 
     return '<div class="block"><div class="bhead">'+
-      '<span class="bname">'+esc(b.label)+'</span>'+
+      '<button class="bname" data-block="'+bi+'">'+esc(b.label)+'</button>'+
       '<span class="btime">'+b.s+'–'+b.e+'</span>'+
       '<span class="bfree '+(free<0?'over':'')+'">'+(free<0?((-free)+'分 超過'):('余白 '+free+'分'))+'</span>'+
       '</div><div class="brow"><div class="gutter">'+b.s+'</div>'+
@@ -404,6 +417,118 @@ function placeTask(text, min, presetId){
   closeSheet(); markDirty(); render();
 }
 
+/* ---------- 動かす ---------- */
+let rippleOn=false;
+
+/* 表示上のブロックに対応する、plan.json 側の実体を返す（無ければ作る） */
+function storedBlock(bi){
+  const day=materialize(dayOffset), v=blocksFor(dayOffset)[bi];
+  let b=day.blocks.find(x=>String(x.label).toLowerCase()===v.label.toLowerCase());
+  if(!b){ b={label:v.label,s:v.s,e:v.e,tasks:[]}; day.blocks.push(b); }
+  if(!Array.isArray(b.tasks)) b.tasks=[];
+  return b;
+}
+function moveTask(bi,ti,dir){
+  const b=storedBlock(bi), j=ti+dir;
+  if(j<0||j>=b.tasks.length) return;
+  const x=b.tasks[ti]; b.tasks[ti]=b.tasks[j]; b.tasks[j]=x;
+  markDirty(); render();
+}
+/* lead = そのタスクの前に空ける時間。余白が先に食われ、尽きると「超過」が出る */
+function adjustLead(bi,ti,d){
+  const t=storedBlock(bi).tasks[ti]; if(!t) return;
+  t.lead=Math.max(0,(t.lead||0)+d); if(!t.lead) delete t.lead;
+  markDirty(); render();
+}
+function adjustMin(bi,ti,d){
+  const t=storedBlock(bi).tasks[ti]; if(!t) return;
+  t.min=Math.max(5,(t.min||0)+d);
+  markDirty(); render();
+}
+function taskToBox(bi,ti){
+  const b=storedBlock(bi), t=b.tasks[ti]; if(!t) return;
+  b.tasks.splice(ti,1);
+  if(!plan.inbox) plan.inbox=[];
+  plan.inbox.push({id:uid(), text:t.text});
+  markDirty(); render();
+}
+function removeTask(bi,ti){ storedBlock(bi).tasks.splice(ti,1); markDirty(); render(); }
+
+/* ブロックごと動かす。ripple が無いときは隣と重ならない範囲に丸める
+   （重なると day-clock 側でどちらが現ブロックか決まらなくなるため） */
+function shiftBlock(bi,delta,ripple){
+  const day=materialize(dayOffset), view=blocksFor(dayOffset), target=view[bi];
+  const tS=hm(target.s), tE=hm(target.e);
+  const after=view.filter((b,i)=> i!==bi && hm(b.s)>=tS);
+  const before=view.filter((b,i)=> i!==bi && hm(b.e)<=tS);
+  let d=delta;
+  if(!ripple){
+    const nextS=after.length?Math.min.apply(null,after.map(b=>hm(b.s))):1440;
+    const prevE=before.length?Math.max.apply(null,before.map(b=>hm(b.e))):0;
+    d=Math.max(prevE-tS, Math.min(d, nextS-tE));
+  }
+  if(d===0){ setStatus('隣のブロックに当たります。「以降もまとめて」を入れてください', true); return; }
+  const apply=(label,ns,ne)=>{
+    let b=day.blocks.find(x=>String(x.label).toLowerCase()===label.toLowerCase());
+    if(!b){ b={label:label,s:'',e:'',tasks:[]}; day.blocks.push(b); }
+    b.s=fmt(Math.max(0,Math.min(1440,ns))); b.e=fmt(Math.max(0,Math.min(1440,ne)));
+  };
+  apply(target.label, tS+d, tE+d);
+  if(ripple) for(const b of after) apply(b.label, hm(b.s)+d, hm(b.e)+d);
+  markDirty(); render();
+}
+
+/* 遅れたときに考えることをゼロにする。終了時刻は動かさない＝枠が短くなり、
+   入り切らなければ「超過」として見える */
+function startNow(bi){
+  const day=materialize(dayOffset), v=blocksFor(dayOffset)[bi];
+  const now=new Date(), nm=now.getHours()*60+now.getMinutes();
+  if(nm>=hm(v.e)){ setStatus('このブロックはもう終わっています', true); return; }
+  const b=day.blocks.find(x=>String(x.label).toLowerCase()===v.label.toLowerCase());
+  if(!b) return;
+  b.s=fmt(nm);
+  for(const t of (b.tasks||[])) delete t.lead;
+  markDirty(); render();
+}
+
+/* ---------- 操作シート ---------- */
+function openTaskSheet(bi,ti){
+  const t=blocksFor(dayOffset)[bi].tasks[ti]; if(!t) return;
+  document.getElementById('sheet-title').textContent=t.text;
+  document.getElementById('sheet-body').innerHTML=
+    '<div class="sec">順序</div>'+
+    '<div class="row" data-act="up:'+bi+':'+ti+'"><div class="rtxt">前へ</div></div>'+
+    '<div class="row" data-act="down:'+bi+':'+ti+'"><div class="rtxt">後へ</div></div>'+
+    '<div class="sec">開始を動かす（余白から先に食う）</div>'+
+    '<div class="row" data-act="lead-:'+bi+':'+ti+'"><div class="rtxt">15分 早く</div>'+
+      '<div class="rmin">前の空き +'+(t.lead||0)+'分</div></div>'+
+    '<div class="row" data-act="lead+:'+bi+':'+ti+'"><div class="rtxt">15分 遅く</div></div>'+
+    '<div class="sec">所要時間</div>'+
+    '<div class="row" data-act="min-:'+bi+':'+ti+'"><div class="rtxt">5分 減らす</div>'+
+      '<div class="rmin">'+(t.min||0)+'分</div></div>'+
+    '<div class="row" data-act="min+:'+bi+':'+ti+'"><div class="rtxt">5分 増やす</div></div>'+
+    '<div class="sec">外す</div>'+
+    '<div class="row" data-act="box:'+bi+':'+ti+'"><div class="rtxt">箱へ戻す</div></div>'+
+    '<div class="row" data-act="del:'+bi+':'+ti+'"><div class="rtxt">削除</div></div>';
+  document.getElementById('sheet').hidden=false;
+}
+function openBlockSheet(bi){
+  const b=blocksFor(dayOffset)[bi];
+  const nm=new Date().getHours()*60+new Date().getMinutes();
+  document.getElementById('sheet-title').textContent=b.label+'  '+b.s+'–'+b.e;
+  document.getElementById('sheet-body').innerHTML=
+    '<label class="row" style="cursor:pointer"><input type="checkbox" id="ripple" style="width:auto;flex:none" '+
+      (rippleOn?'checked':'')+'><div class="rtxt">以降もまとめてずらす</div></label>'+
+    '<div class="sec">ブロックを動かす</div>'+
+    '<div class="row" data-act="blk-:'+bi+'"><div class="rtxt">15分 早める</div></div>'+
+    '<div class="row" data-act="blk+:'+bi+'"><div class="rtxt">15分 遅らせる</div></div>'+
+    (dayOffset===0
+      ? '<div class="sec">遅れているとき</div><div class="row" data-act="now:'+bi+'">'+
+        '<div class="rtxt">今ここから始める</div><div class="rmin">'+fmt(nm)+'</div></div>'
+      : '');
+  document.getElementById('sheet').hidden=false;
+}
+
 /* ---------- 変更と保存 ---------- */
 function markDirty(){
   dirty=true; setStatus('未保存…');
@@ -462,6 +587,11 @@ document.getElementById('tabs').addEventListener('click', function(e){
   dayOffset=Number(b.dataset.off); render();
 });
 document.getElementById('timeline').addEventListener('click', function(e){
+  // ⋯ とブロック名は、カードの完了トグルより先に拾う
+  const more=e.target.closest('[data-more]');
+  if(more){ const p=more.dataset.more.split(':'); openTaskSheet(Number(p[0]),Number(p[1])); return; }
+  const blk=e.target.closest('[data-block]');
+  if(blk){ openBlockSheet(Number(blk.dataset.block)); return; }
   const add=e.target.closest('[data-add]');
   if(add){ openSheet(Number(add.dataset.add)); return; }
   const t=e.target.closest('.task');
@@ -487,6 +617,24 @@ document.getElementById('chips').addEventListener('click', function(e){
 });
 document.getElementById('sheet').addEventListener('click', function(e){
   if(e.target.id==='sheet'){ closeSheet(); return; }
+  if(e.target.id==='ripple'){ rippleOn=e.target.checked; return; }
+  const act=e.target.closest('[data-act]');
+  if(act){
+    const p=act.dataset.act.split(':'), op=p[0], bi=Number(p[1]), ti=Number(p[2]);
+    if(op==='up'||op==='down'){ moveTask(bi,ti,op==='up'?-1:1); closeSheet(); return; }
+    if(op==='box'){ taskToBox(bi,ti); closeSheet(); return; }
+    if(op==='del'){ removeTask(bi,ti); closeSheet(); return; }
+    if(op==='now'){ startNow(bi); closeSheet(); return; }
+    if(op==='lead-') adjustLead(bi,ti,-15);
+    else if(op==='lead+') adjustLead(bi,ti,15);
+    else if(op==='min-') adjustMin(bi,ti,-5);
+    else if(op==='min+') adjustMin(bi,ti,5);
+    else if(op==='blk-') shiftBlock(bi,-15,rippleOn);
+    else if(op==='blk+') shiftBlock(bi,15,rippleOn);
+    // 最新の値を出すために開き直す
+    if(op.indexOf('blk')===0) openBlockSheet(bi); else openTaskSheet(bi,ti);
+    return;
+  }
   const cat=e.target.closest('[data-cat]');
   if(cat){
     const all=document.querySelectorAll('[data-cat]');
