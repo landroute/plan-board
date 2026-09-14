@@ -1,0 +1,544 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#141414">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<title>板</title>
+<style>
+:root{
+  --bg:#faf9f7; --card:#fff; --line:#e2ded6; --line2:#cfcabf;
+  --fg:#1c1b19; --fg2:#5f5c55; --fg3:#8c887f;
+  --task-bg:#e6eef7; --task-fg:#123a63; --task-line:#b9d2ea;
+  --buf:#efece6; --warn-bg:#fbeedb; --warn-fg:#7a4c09;
+  --now:#c0392b;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#141414; --card:#1d1d1c; --line:#2e2e2c; --line2:#3d3d3a;
+    --fg:#eceae6; --fg2:#a5a199; --fg3:#78746d;
+    --task-bg:#18344f; --task-fg:#cfe3f6; --task-line:#27506f;
+    --buf:#242422; --warn-bg:#3d2f16; --warn-fg:#f0c887;
+    --now:#e2675a;
+  }
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--fg);
+  font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif;
+  padding-bottom:env(safe-area-inset-bottom);
+  -webkit-text-size-adjust:100%;
+}
+header{
+  position:sticky; top:0; z-index:20; background:var(--bg);
+  border-bottom:1px solid var(--line); padding:8px 12px 0;
+  padding-top:calc(8px + env(safe-area-inset-top));
+}
+.top{display:flex;align-items:center;gap:8px}
+.tabs{display:flex;gap:4px;flex:1;overflow:auto}
+.tab{
+  flex:none; padding:7px 13px; border-radius:8px; font-size:14px;
+  color:var(--fg2); background:transparent; border:0; cursor:pointer; white-space:nowrap;
+}
+.tab.on{background:var(--task-bg); color:var(--task-fg); font-weight:600}
+.icon-btn{
+  flex:none; width:36px;height:36px; border-radius:8px; border:1px solid var(--line2);
+  background:transparent; color:var(--fg2); font-size:17px; cursor:pointer;
+}
+#status{font-size:12px;color:var(--fg3);padding:6px 2px 8px;min-height:26px}
+#status.err{color:var(--now)}
+main{padding:12px 12px 0}
+.block{margin-bottom:18px}
+.bhead{display:flex;align-items:baseline;gap:8px;margin-bottom:6px}
+.bname{font-size:13px;font-weight:600;color:var(--fg2)}
+.btime{font-size:12px;color:var(--fg3);font-variant-numeric:tabular-nums}
+.bfree{margin-left:auto;font-size:11px;color:var(--fg3)}
+.bfree.over{color:var(--warn-fg);background:var(--warn-bg);padding:1px 7px;border-radius:6px}
+.brow{display:flex;gap:8px}
+.gutter{width:38px;flex:none;font-size:11px;color:var(--fg3);font-variant-numeric:tabular-nums;padding-top:2px}
+.body{flex:1;min-width:0;position:relative}
+.task{
+  background:var(--task-bg); border:1px solid var(--task-line); border-radius:8px;
+  padding:7px 10px; display:flex; flex-direction:column; justify-content:space-between;
+  cursor:pointer; overflow:hidden; position:relative;
+}
+.task.done{opacity:.45}
+.task.done .ttxt{text-decoration:line-through}
+.ttxt{font-size:14px;color:var(--task-fg);line-height:1.35;overflow:hidden}
+.tmin{font-size:11px;color:var(--task-fg);opacity:.75;font-variant-numeric:tabular-nums}
+.buf{background:var(--buf);border-radius:6px;margin:3px 0}
+.add{
+  width:100%; margin-top:4px; padding:9px; border-radius:8px; cursor:pointer;
+  border:1px dashed var(--line2); background:transparent; color:var(--fg3); font-size:13px;
+}
+.nowline{position:absolute;left:-38px;right:0;height:0;border-top:2px solid var(--now);z-index:5}
+.nowline span{
+  position:absolute;left:0;top:-8px;font-size:10px;color:#fff;background:var(--now);
+  padding:0 4px;border-radius:3px;font-variant-numeric:tabular-nums;
+}
+#box{border-top:1px solid var(--line);margin:8px 12px 0;padding:10px 0 16px}
+.boxlabel{font-size:12px;color:var(--fg2);margin-bottom:8px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{
+  font-size:13px;padding:6px 11px;border-radius:8px;background:var(--card);
+  border:1px solid var(--line);color:var(--fg);cursor:pointer;
+}
+.sheet{position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.45);display:flex;align-items:flex-end}
+.sheet[hidden]{display:none}
+.panel{
+  width:100%;max-height:86vh;overflow:auto;background:var(--card);
+  border-radius:14px 14px 0 0;padding:14px 14px calc(20px + env(safe-area-inset-bottom));
+}
+.phead{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.ptitle{font-size:15px;font-weight:600;flex:1}
+.sec{font-size:12px;color:var(--fg2);margin:14px 0 6px}
+.row{display:flex;align-items:center;gap:10px;padding:11px 2px;border-bottom:1px solid var(--line);cursor:pointer}
+.row:last-child{border-bottom:0}
+.rtxt{flex:1;font-size:14px;line-height:1.4}
+.rmin{font-size:12px;color:var(--fg3);font-variant-numeric:tabular-nums;flex:none}
+.cats{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px}
+input[type=text],input[type=password],input[type=number]{
+  width:100%;padding:10px;border-radius:8px;border:1px solid var(--line2);
+  background:var(--bg);color:var(--fg);font-size:15px;
+}
+label.f{display:block;font-size:12px;color:var(--fg2);margin:12px 0 4px}
+.btn{
+  padding:10px 14px;border-radius:8px;border:1px solid var(--line2);
+  background:transparent;color:var(--fg);font-size:14px;cursor:pointer;
+}
+.btn.pri{background:var(--task-bg);color:var(--task-fg);border-color:var(--task-line);font-weight:600}
+.hint{font-size:12px;color:var(--fg3);line-height:1.5;margin-top:8px}
+.empty{color:var(--fg3);font-size:13px;padding:20px 0;text-align:center}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="top">
+    <div class="tabs" id="tabs"></div>
+    <button class="icon-btn" id="reload-btn" aria-label="再読み込み">&#8635;</button>
+    <button class="icon-btn" id="settings-btn" aria-label="設定">&#9881;</button>
+  </div>
+  <div id="status">読み込み中…</div>
+</header>
+
+<main id="timeline"></main>
+
+<section id="box">
+  <div class="boxlabel">箱 — 未配置</div>
+  <div class="chips" id="chips"></div>
+</section>
+
+<div class="sheet" id="sheet" hidden>
+  <div class="panel">
+    <div class="phead">
+      <div class="ptitle" id="sheet-title">置く</div>
+      <button class="btn" id="sheet-close">閉じる</button>
+    </div>
+    <div id="sheet-body"></div>
+  </div>
+</div>
+
+<div class="sheet" id="settings" hidden>
+  <div class="panel">
+    <div class="phead">
+      <div class="ptitle">設定</div>
+      <button class="btn" id="settings-close">閉じる</button>
+    </div>
+    <label class="f">リポジトリ（owner/repo）</label>
+    <input type="text" id="cfg-repo" placeholder="landroute/plan-data">
+    <label class="f">GitHub トークン（fine-grained・plan-data のみ・Contents: Read and write）</label>
+    <input type="password" id="cfg-token" placeholder="github_pat_...">
+    <label class="f">ntfy トピック（任意・Phase 5 で使用）</label>
+    <input type="text" id="cfg-ntfy" placeholder="長いランダム文字列">
+    <div style="display:flex;gap:8px;margin-top:16px">
+      <button class="btn pri" id="cfg-save">保存して読み込む</button>
+      <button class="btn" id="cfg-clear">トークンを消す</button>
+    </div>
+    <p class="hint">
+      トークンはこの端末のブラウザ内（localStorage）にのみ保存されます。
+      <b>権限は plan-data だけ</b>に絞ってください。claude-tools には触れない設定にすること。
+      端末を紛失したら GitHub 側でトークンを失効させてください。
+    </p>
+  </div>
+</div>
+
+<script>
+/* =====================================================
+   板 — プランを組む単体Webアプリ
+   真実は plan-data/plan.json。書き手はこの板だけ（一方通行）
+===================================================== */
+
+/* 既定スケジュール。day-clock の BASE_SCHEDULE と同じ定義を持つ */
+const BASE_SCHEDULE = {
+  weekday:[
+    {label:'Primary',s:'18:00',e:'19:00'},
+    {label:'DP',s:'19:00',e:'20:30'},
+    {label:'Free',s:'20:30',e:'21:45'},
+    {label:'終了処理',s:'21:45',e:'22:00'},
+    {label:'瞑想',s:'22:00',e:'22:15'}
+  ],
+  fri:[
+    {label:'Primary',s:'18:00',e:'19:00'},
+    {label:'DP',s:'19:00',e:'20:30'},
+    {label:'Free',s:'20:30',e:'24:00'}
+  ],
+  sat:[
+    {label:'Free',s:'10:00',e:'18:00'},
+    {label:'Primary',s:'18:00',e:'19:00'},
+    {label:'DP',s:'19:00',e:'20:30'},
+    {label:'Free',s:'20:30',e:'24:00'}
+  ],
+  sun:[
+    {label:'Free',s:'10:00',e:'18:00'},
+    {label:'Primary',s:'18:00',e:'19:00'},
+    {label:'DP',s:'19:00',e:'20:30'},
+    {label:'Free',s:'20:30',e:'21:45'},
+    {label:'終了処理',s:'21:45',e:'22:00'},
+    {label:'瞑想',s:'22:00',e:'22:15'}
+  ]
+};
+function baseFor(dow){
+  if(dow>=1&&dow<=4) return BASE_SCHEDULE.weekday;
+  if(dow===5) return BASE_SCHEDULE.fri;
+  if(dow===6) return BASE_SCHEDULE.sat;
+  return BASE_SCHEDULE.sun;
+}
+
+const PX_PER_MIN = 2.2, MIN_CARD_H = 40;
+const DAY = ['日','月','火','水','木','金','土'];
+const pad = n => String(Math.floor(n)).padStart(2,'0');
+const hm  = s => { const p=String(s).split(':').map(Number); return p[0]*60+(p[1]||0); };
+const fmt = m => pad(m/60)+':'+pad(m%60);
+const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const uid = () => Math.random().toString(36).slice(2,9);
+
+/* ---------- 設定 ---------- */
+const CFG_KEY='board.cfg', CACHE_KEY='board.cache';
+let cfg = { repo:'landroute/plan-data', token:'', ntfy:'' };
+try{ Object.assign(cfg, JSON.parse(localStorage.getItem(CFG_KEY)||'{}')); }catch(e){}
+function saveCfg(){ try{ localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); }catch(e){} }
+
+/* ---------- 状態 ---------- */
+let plan=null, presets=null, shaPlan=null, dayOffset=0, dirty=false, saveTimer=null;
+
+/* ---------- UTF-8 安全な base64 ---------- */
+function b64enc(str){
+  const bytes=new TextEncoder().encode(str);
+  let bin=''; for(let i=0;i<bytes.length;i++) bin+=String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+function b64dec(b64){
+  const bin=atob(String(b64).replace(/\s/g,''));
+  const bytes=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
+}
+
+/* ---------- GitHub API ---------- */
+async function ghGet(file){
+  const r=await fetch('https://api.github.com/repos/'+cfg.repo+'/contents/'+file,{
+    headers:{ Authorization:'Bearer '+cfg.token, Accept:'application/vnd.github+json' },
+    cache:'no-store'
+  });
+  if(r.status===404) return {missing:true};
+  if(!r.ok) throw new Error(file+': HTTP '+r.status+(r.status===401?'（トークンを確認）':''));
+  const j=await r.json();
+  return { text:b64dec(j.content), sha:j.sha };
+}
+async function ghPut(file, text, sha, message){
+  const r=await fetch('https://api.github.com/repos/'+cfg.repo+'/contents/'+file,{
+    method:'PUT',
+    headers:{ Authorization:'Bearer '+cfg.token, Accept:'application/vnd.github+json',
+              'Content-Type':'application/json' },
+    body: JSON.stringify({ message:message, content:b64enc(text), sha:sha })
+  });
+  if(r.status===409 || r.status===422){ const e=new Error('conflict'); e.conflict=true; throw e; }
+  if(!r.ok) throw new Error('保存失敗: HTTP '+r.status);
+  const j=await r.json();
+  return j.content.sha;
+}
+
+/* ---------- 日付 ---------- */
+function dateAt(off){ const d=new Date(); d.setDate(d.getDate()+off); return d; }
+function ymd(d){ return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate()); }
+
+/* その日のブロック。plan に無ければ既定スケジュールを返す（保存はしない） */
+function blocksFor(off){
+  const d=dateAt(off), key=ymd(d);
+  const stored=plan && plan.days && plan.days[key];
+  const base=baseFor(d.getDay()).map(b=>({label:b.label,s:b.s,e:b.e,tasks:[]}));
+  if(!stored || !Array.isArray(stored.blocks)) return base;
+  const out=base.map(b=>{
+    const m=stored.blocks.find(x=>String(x.label).toLowerCase()===b.label.toLowerCase());
+    return m ? {label:b.label, s:m.s||b.s, e:m.e||b.e, tasks:(m.tasks||[]).slice()} : b;
+  });
+  for(const sb of stored.blocks){
+    if(!out.some(b=>b.label.toLowerCase()===String(sb.label).toLowerCase()))
+      out.push({label:sb.label,s:sb.s,e:sb.e,tasks:(sb.tasks||[]).slice()});
+  }
+  out.sort((a,b)=>hm(a.s)-hm(b.s));
+  return out;
+}
+
+/* 編集するときに、その日を plan に実体化する */
+function materialize(off){
+  const key=ymd(dateAt(off));
+  if(!plan.days) plan.days={};
+  if(!plan.days[key]) plan.days[key]={blocks:blocksFor(off)};
+  return plan.days[key];
+}
+function bufferMin(){ return (presets && presets.bufferMin!=null) ? presets.bufferMin : 5; }
+
+/* ---------- 描画 ---------- */
+function renderTabs(){
+  document.getElementById('tabs').innerHTML=[0,1,2].map(o=>{
+    const d=dateAt(o);
+    const name = o===0?'今日' : o===1?'明日' : (d.getMonth()+1)+'/'+d.getDate();
+    return '<button class="tab '+(o===dayOffset?'on':'')+'" data-off="'+o+'">'+name+'('+DAY[d.getDay()]+')</button>';
+  }).join('');
+}
+
+function renderTimeline(){
+  const el=document.getElementById('timeline');
+  if(!plan){ el.innerHTML='<div class="empty">設定からトークンを入れてください</div>'; return; }
+  const blocks=blocksFor(dayOffset);
+  const now=new Date(), nm=now.getHours()*60+now.getMinutes(), isToday=(dayOffset===0);
+  const buf=bufferMin();
+
+  el.innerHTML=blocks.map((b,bi)=>{
+    const s=hm(b.s), e=hm(b.e), dur=Math.max(1,e-s);
+    const used=b.tasks.reduce((a,t)=>a+(t.min||0),0) + buf*b.tasks.length;
+    const free=dur-used;
+
+    let body='';
+    for(let ti=0; ti<b.tasks.length; ti++){
+      const t=b.tasks[ti];
+      const h=Math.max(MIN_CARD_H,(t.min||0)*PX_PER_MIN);
+      body+='<div class="task '+(t.done?'done':'')+'" style="height:'+h+'px" data-b="'+bi+'" data-t="'+ti+'">'+
+            '<div class="ttxt">'+esc(t.text)+'</div><div class="tmin">'+(t.min||0)+'分</div></div>';
+      body+='<div class="buf" style="height:'+Math.max(6,buf*PX_PER_MIN)+'px"></div>';
+    }
+    if(free>0) body+='<div class="buf" style="height:'+Math.max(8,Math.min(free,60)*PX_PER_MIN)+'px"></div>';
+    body+='<button class="add" data-add="'+bi+'">＋ ここに置く</button>';
+
+    let nowline='';
+    if(isToday && nm>=s && nm<e)
+      nowline='<div class="nowline" style="top:'+(((nm-s)/dur)*100)+'%"><span>'+fmt(nm)+'</span></div>';
+
+    return '<div class="block"><div class="bhead">'+
+      '<span class="bname">'+esc(b.label)+'</span>'+
+      '<span class="btime">'+b.s+'–'+b.e+'</span>'+
+      '<span class="bfree '+(free<0?'over':'')+'">'+(free<0?((-free)+'分 超過'):('余白 '+free+'分'))+'</span>'+
+      '</div><div class="brow"><div class="gutter">'+b.s+'</div>'+
+      '<div class="body">'+body+nowline+'</div></div></div>';
+  }).join('');
+}
+
+function renderBox(){
+  const c=document.getElementById('chips');
+  const items=(plan && plan.inbox)||[];
+  c.innerHTML = items.map(i=>'<button class="chip" data-inbox="'+i.id+'">'+esc(i.text)+'</button>').join('')
+    + '<button class="chip" data-newbox="1">＋ 追加</button>';
+}
+
+function render(){ renderTabs(); renderTimeline(); renderBox(); }
+
+function setStatus(msg, isErr){
+  const s=document.getElementById('status');
+  s.textContent=msg; s.classList.toggle('err', !!isErr);
+}
+
+/* ---------- 置くシート ---------- */
+let sheetTargetBlock=null;
+function openSheet(bi){
+  sheetTargetBlock=bi;
+  const blocks=blocksFor(dayOffset);
+  document.getElementById('sheet-title').textContent=blocks[bi].label+' に置く';
+  const inbox=(plan.inbox||[]);
+  let h='';
+  if(inbox.length){
+    h+='<div class="sec">箱から</div>';
+    h+=inbox.map(i=>'<div class="row" data-pick-inbox="'+i.id+'">'+
+        '<div class="rtxt">'+esc(i.text)+'</div><div class="rmin">—</div></div>').join('');
+  }
+  h+='<div class="sec">型から</div>';
+  h+='<div class="cats">'+((presets&&presets.categories)||[]).map((c,ci)=>
+        '<button class="tab '+(ci===0?'on':'')+'" data-cat="'+ci+'">'+esc(c.name)+'</button>').join('')+'</div>';
+  h+='<div id="preset-list"></div>';
+  h+='<div class="sec">自由記述</div>'+
+     '<input type="text" id="free-text" placeholder="具体的に始められる動作で">'+
+     '<div style="display:flex;gap:8px;align-items:center;margin-top:8px">'+
+     '<input type="number" id="free-min" value="25" min="5" max="180" step="5" style="width:90px">'+
+     '<span class="rmin">分</span>'+
+     '<button class="btn pri" id="free-add" style="margin-left:auto">置く</button></div>';
+  document.getElementById('sheet-body').innerHTML=h;
+  renderPresetList(0);
+  document.getElementById('sheet').hidden=false;
+}
+function renderPresetList(ci){
+  const cat=((presets&&presets.categories)||[])[ci];
+  document.getElementById('preset-list').innerHTML = cat
+    ? cat.presets.map(p=>'<div class="row" data-pick-preset="'+cat.id+'/'+p.id+'">'+
+        '<div class="rtxt">'+esc(p.text)+'</div><div class="rmin">'+p.min+'分</div></div>').join('')
+    : '<div class="empty">型がありません</div>';
+}
+function closeSheet(){ document.getElementById('sheet').hidden=true; sheetTargetBlock=null; }
+
+function placeTask(text, min, presetId){
+  const day=materialize(dayOffset);
+  const blocks=blocksFor(dayOffset);
+  const label=blocks[sheetTargetBlock].label;
+  let b=day.blocks.find(x=>String(x.label).toLowerCase()===label.toLowerCase());
+  if(!b){ b={label:label,s:blocks[sheetTargetBlock].s,e:blocks[sheetTargetBlock].e,tasks:[]}; day.blocks.push(b); }
+  if(!Array.isArray(b.tasks)) b.tasks=[];
+  b.tasks.push({ id:uid(), preset:presetId||null, text:text, min:Number(min)||25, done:false });
+  closeSheet(); markDirty(); render();
+}
+
+/* ---------- 変更と保存 ---------- */
+function markDirty(){
+  dirty=true; setStatus('未保存…');
+  cacheLocal();
+  clearTimeout(saveTimer);
+  saveTimer=setTimeout(save, 1500);
+}
+function cacheLocal(){
+  try{ localStorage.setItem(CACHE_KEY, JSON.stringify({plan:plan,presets:presets,shaPlan:shaPlan,at:Date.now()})); }catch(e){}
+}
+async function save(){
+  if(!dirty || !cfg.token) return;
+  if(!navigator.onLine){ setStatus('オフライン — 復帰時に保存します'); return; }
+  try{
+    setStatus('保存中…');
+    plan.updatedAt=new Date().toISOString();
+    shaPlan=await ghPut('plan.json', JSON.stringify(plan,null,2)+'\n', shaPlan, 'plan: 板から更新');
+    dirty=false; cacheLocal();
+    setStatus('保存済み '+new Date().toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'}));
+  }catch(e){
+    if(e.conflict) setStatus('他の端末で更新されています。再読み込みしてください', true);
+    else setStatus(e.message, true);
+  }
+}
+
+/* ---------- 読み込み ---------- */
+async function loadAll(){
+  if(!cfg.token){ setStatus('設定からトークンを入れてください', true); renderFromCache(); return; }
+  try{
+    setStatus('読み込み中…');
+    const res=await Promise.all([ghGet('plan.json'), ghGet('presets.json')]);
+    const p=res[0], pr=res[1];
+    if(p.missing){ plan={version:1,days:{},inbox:[]}; shaPlan=null; }
+    else { plan=JSON.parse(p.text); shaPlan=p.sha; }
+    presets = pr.missing ? {bufferMin:5,categories:[]} : JSON.parse(pr.text);
+    if(!plan.days) plan.days={};
+    if(!plan.inbox) plan.inbox=[];
+    dirty=false; cacheLocal(); render();
+    setStatus('同期 '+new Date().toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'}));
+  }catch(e){
+    setStatus(e.message+' — キャッシュを表示します', true);
+    renderFromCache();
+  }
+}
+function renderFromCache(){
+  try{
+    const c=JSON.parse(localStorage.getItem(CACHE_KEY)||'null');
+    if(c && c.plan){ plan=c.plan; presets=c.presets; shaPlan=c.shaPlan; }
+  }catch(e){}
+  render();
+}
+
+/* ---------- イベント ---------- */
+document.getElementById('tabs').addEventListener('click', function(e){
+  const b=e.target.closest('[data-off]'); if(!b) return;
+  dayOffset=Number(b.dataset.off); render();
+});
+document.getElementById('timeline').addEventListener('click', function(e){
+  const add=e.target.closest('[data-add]');
+  if(add){ openSheet(Number(add.dataset.add)); return; }
+  const t=e.target.closest('.task');
+  if(t){
+    const blocks=blocksFor(dayOffset), label=blocks[Number(t.dataset.b)].label;
+    const day=materialize(dayOffset);
+    const b=day.blocks.find(x=>String(x.label).toLowerCase()===label.toLowerCase());
+    const task=b && b.tasks[Number(t.dataset.t)];
+    if(task){
+      task.done=!task.done;
+      if(task.done) task.doneAt=new Date().toISOString(); else delete task.doneAt;
+      markDirty(); render();
+    }
+  }
+});
+document.getElementById('chips').addEventListener('click', function(e){
+  if(e.target.closest('[data-newbox]')){
+    const txt=prompt('箱に入れる1行'); if(!txt) return;
+    if(!plan.inbox) plan.inbox=[];
+    plan.inbox.push({id:uid(), text:txt.trim()});
+    markDirty(); render();
+  }
+});
+document.getElementById('sheet').addEventListener('click', function(e){
+  if(e.target.id==='sheet'){ closeSheet(); return; }
+  const cat=e.target.closest('[data-cat]');
+  if(cat){
+    const all=document.querySelectorAll('[data-cat]');
+    for(let i=0;i<all.length;i++) all[i].classList.remove('on');
+    cat.classList.add('on'); renderPresetList(Number(cat.dataset.cat)); return;
+  }
+  const pp=e.target.closest('[data-pick-preset]');
+  if(pp){
+    const parts=pp.dataset.pickPreset.split('/');
+    const c=presets.categories.find(x=>x.id===parts[0]);
+    const p=c && c.presets.find(x=>x.id===parts[1]);
+    if(p) placeTask(p.text, p.min, parts[0]+'/'+parts[1]);
+    return;
+  }
+  const pi=e.target.closest('[data-pick-inbox]');
+  if(pi){
+    const id=pi.dataset.pickInbox;
+    const item=(plan.inbox||[]).find(x=>x.id===id);
+    if(item){ plan.inbox=plan.inbox.filter(x=>x.id!==id); placeTask(item.text, 25, null); }
+    return;
+  }
+  if(e.target.id==='free-add'){
+    const txt=document.getElementById('free-text').value.trim();
+    if(!txt){ document.getElementById('free-text').focus(); return; }
+    placeTask(txt, document.getElementById('free-min').value, null);
+  }
+});
+document.getElementById('sheet-close').addEventListener('click', closeSheet);
+document.getElementById('reload-btn').addEventListener('click', loadAll);
+
+/* 設定 */
+const stEl=document.getElementById('settings');
+document.getElementById('settings-btn').addEventListener('click', function(){
+  document.getElementById('cfg-repo').value=cfg.repo||'';
+  document.getElementById('cfg-token').value=cfg.token||'';
+  document.getElementById('cfg-ntfy').value=cfg.ntfy||'';
+  stEl.hidden=false;
+});
+document.getElementById('settings-close').addEventListener('click', function(){ stEl.hidden=true; });
+stEl.addEventListener('click', function(e){ if(e.target.id==='settings') stEl.hidden=true; });
+document.getElementById('cfg-save').addEventListener('click', function(){
+  cfg.repo=document.getElementById('cfg-repo').value.trim()||'landroute/plan-data';
+  cfg.token=document.getElementById('cfg-token').value.trim();
+  cfg.ntfy=document.getElementById('cfg-ntfy').value.trim();
+  saveCfg(); stEl.hidden=true; loadAll();
+});
+document.getElementById('cfg-clear').addEventListener('click', function(){
+  cfg.token=''; saveCfg(); document.getElementById('cfg-token').value='';
+  setStatus('トークンを消しました', true);
+});
+
+window.addEventListener('online', function(){ if(dirty) save(); });
+setInterval(function(){ if(dayOffset===0) renderTimeline(); }, 60000);
+
+if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function(){});
+render();
+loadAll();
+</script>
+</body>
+</html>
