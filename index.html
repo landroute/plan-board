@@ -484,6 +484,8 @@ function startNow(bi){
   const day=materialize(dayOffset), v=blocksFor(dayOffset)[bi];
   const now=new Date(), nm=now.getHours()*60+now.getMinutes();
   if(nm>=hm(v.e)){ setStatus('このブロックはもう終わっています', true); return; }
+  // 「遅れているとき」専用。まだ始まっていない枠に使うと巨大なブロックになってしまう
+  if(nm<hm(v.s)){ setStatus('まだ始まっていません。早めるなら「15分 早める」を使ってください', true); return; }
   const b=day.blocks.find(x=>String(x.label).toLowerCase()===v.label.toLowerCase());
   if(!b) return;
   b.s=fmt(nm);
@@ -522,7 +524,8 @@ function openBlockSheet(bi){
     '<div class="sec">ブロックを動かす</div>'+
     '<div class="row" data-act="blk-:'+bi+'"><div class="rtxt">15分 早める</div></div>'+
     '<div class="row" data-act="blk+:'+bi+'"><div class="rtxt">15分 遅らせる</div></div>'+
-    (dayOffset===0
+    // 今この枠の中にいるときだけ出す（遅れているときの道具なので）
+    (dayOffset===0 && nm>=hm(b.s) && nm<hm(b.e)
       ? '<div class="sec">遅れているとき</div><div class="row" data-act="now:'+bi+'">'+
         '<div class="rtxt">今ここから始める</div><div class="rmin">'+fmt(nm)+'</div></div>'
       : '');
