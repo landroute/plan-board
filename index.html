@@ -131,6 +131,41 @@ label.f{display:block;font-size:12px;color:var(--fg2);margin:12px 0 4px}
   background:var(--warn-bg);color:var(--warn-fg);font-variant-numeric:tabular-nums;cursor:pointer;
 }
 .empty{color:var(--fg3);font-size:13px;padding:20px 0;text-align:center}
+input[type=date]{
+  width:100%;padding:9px 10px;border-radius:8px;border:1px solid var(--line2);
+  background:var(--bg);color:var(--fg);font-size:15px;font-family:inherit;
+}
+input[type=color]{width:100%;height:42px;padding:3px;border-radius:8px;border:1px solid var(--line2);background:var(--bg)}
+@media (min-width:800px){ .panel{max-width:760px;margin:0 auto} }
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;flex:none}
+.badge{font-size:10px;padding:1px 6px;border-radius:6px;background:var(--warn-bg);color:var(--warn-fg);vertical-align:2px;font-weight:600}
+.for{font-size:10px;color:var(--task-fg);background:var(--task-bg);border-radius:6px;padding:1px 6px;flex:none}
+.late{color:var(--warn-fg)}
+.crumbs{font-size:13px;color:var(--fg2);margin:0 0 4px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.crumb{border:0;background:transparent;color:var(--task-fg);font:inherit;cursor:pointer;padding:2px 0;text-decoration:underline}
+.row.sel{background:var(--task-bg);border-radius:8px;padding-left:8px;padding-right:8px}
+.row.dim{opacity:.5}
+.tnote{opacity:.75}
+.placefoot{position:sticky;bottom:calc(-20px - env(safe-area-inset-bottom));background:var(--card);padding:10px 0 6px;
+  display:flex;gap:8px;border-top:1px solid var(--line);margin-top:8px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.stage{border:1px solid var(--line);border-radius:10px;padding:10px 10px 8px;margin-bottom:10px}
+.stage.done{opacity:.75}
+.srow,.prow{display:flex;gap:6px;align-items:center}
+.prow{margin-top:8px;flex-wrap:wrap}
+.prow input[type=text]{flex:1 1 100%}
+.prow input[type=number]{width:80px;flex:none}
+.prow .mini{margin-left:auto}
+.mini{flex:none;min-width:34px;height:38px;padding:0 8px;border-radius:8px;border:1px solid var(--line2);background:transparent;color:var(--fg2);cursor:pointer;font-size:13px}
+.donebox{display:flex;gap:6px;align-items:center;margin-top:8px;font-size:13px;color:var(--fg2)}
+.add.small{padding:6px;font-size:12px}
+.chip input{width:auto;margin:0 4px 0 0;vertical-align:-1px}
+.edfoot{position:sticky;bottom:calc(-20px - env(safe-area-inset-bottom));background:var(--card);padding:12px 0 8px;
+  border-top:1px solid var(--line);margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.edfoot .err{width:100%;color:var(--now);font-size:13px}
+.warnbox{background:var(--warn-bg);color:var(--warn-fg);padding:8px 10px;border-radius:8px}
+.textbtn{flex:none;height:36px;padding:0 11px;border-radius:8px;border:1px solid var(--line2);
+  background:transparent;color:var(--fg2);font-size:13px;cursor:pointer}
 </style>
 </head>
 <body>
@@ -138,6 +173,7 @@ label.f{display:block;font-size:12px;color:var(--fg2);margin:12px 0 4px}
 <header>
   <div class="top">
     <div class="tabs" id="tabs"></div>
+    <button class="textbtn" id="plan-btn">計画</button>
     <button class="icon-btn" id="reload-btn" aria-label="再読み込み">&#8635;</button>
     <button class="icon-btn" id="settings-btn" aria-label="設定">&#9881;</button>
   </div>
@@ -158,6 +194,16 @@ label.f{display:block;font-size:12px;color:var(--fg2);margin:12px 0 4px}
       <button class="btn" id="sheet-close">閉じる</button>
     </div>
     <div id="sheet-body"></div>
+  </div>
+</div>
+
+<div class="sheet" id="plan" hidden>
+  <div class="panel" style="max-height:94vh">
+    <div class="phead">
+      <div class="ptitle" id="plan-title">計画</div>
+      <button class="btn" id="plan-close">閉じる</button>
+    </div>
+    <div id="plan-body"></div>
   </div>
 </div>
 
@@ -253,9 +299,38 @@ let cfg = { repo:'landroute/plan-data', token:'', ntfy:'' };
 try{ Object.assign(cfg, JSON.parse(localStorage.getItem(CFG_KEY)||'{}')); }catch(e){}
 function saveCfg(){ try{ localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); }catch(e){} }
 
-/* ---------- 状態 ---------- */
-let plan=null, presets=null, shaPlan=null, shaPresets=null, dayOffset=0, dirty=false, saveTimer=null;
-let timelogText='', shaTimelog=null, timelogDirty=false, currentCat=0;
+/* ---------- 状態 ----------
+   projects = projects.json（大=プロジェクト → 中=工程 → 小=1手の型 と、計画） */
+let plan=null, projects=null, shaPlan=null, shaProjects=null, dayOffset=0, dirty=false, saveTimer=null;
+let timelogText='', shaTimelog=null, timelogDirty=false;
+
+/* ---------- 型の id（大/中/小）を引く ----------
+   day-clock の server.js にも同じ仕様の resolvePreset() がある（別リポジトリなので二重に持つ）。
+   aliases は旧 2 階層の id（blender/blockout など）を過去の plan.json から引くためだけに使う */
+function projList(){ return (projects && projects.projects) || []; }
+function presetIndex(){
+  const m={};
+  for(const p of projList()) for(const s of (p.stages||[])) for(const x of (s.presets||[])){
+    const r={p:p, s:s, x:x, id:p.id+'/'+s.id+'/'+x.id};
+    m[r.id]=r;
+    for(const a of (x.aliases||[])) if(!m[a]) m[a]=r;
+  }
+  return m;
+}
+function resolvePreset(id){ return id ? (presetIndex()[id] || null) : null; }
+const md = s => { const p=String(s).split('-').map(Number); return p[1]+'/'+p[2]; };
+function daysUntil(s){ const p=String(s).split('-').map(Number), t=new Date(); t.setHours(0,0,0,0); return Math.round((new Date(p[0],p[1]-1,p[2])-t)/86400000); }
+/* 工程の状態。期日のある工程の期間は「前の工程の期日（最初はプロジェクトの開始日）〜自分の期日」 */
+function stageStatus(p, s){
+  if(s.doneAt) return 'done';
+  if(!s.due) return 'cont';
+  const today=ymd(new Date());
+  if(s.due<today) return 'late';
+  let from=p.start||today;
+  for(const x of p.stages){ if(x===s) break; if(x.due) from=x.due; }
+  return from<=today ? 'active' : 'todo';
+}
+const ST_LABEL={done:'完了',active:'進行中',late:'期限切れ',todo:'未着手',cont:'継続'};
 
 /* ---------- UTF-8 安全な base64 ---------- */
 function b64enc(str){
@@ -323,7 +398,7 @@ function materialize(off){
   if(!plan.days[key]) plan.days[key]={blocks:blocksFor(off)};
   return plan.days[key];
 }
-function bufferMin(){ return (presets && presets.bufferMin!=null) ? presets.bufferMin : 5; }
+function bufferMin(){ return (projects && projects.bufferMin!=null) ? projects.bufferMin : 5; }
 
 /* ---------- 描画 ---------- */
 function renderTabs(){
@@ -352,8 +427,10 @@ function renderTimeline(){
       // lead = そのタスクの前に明示的に空けた時間。バッファと同じ見た目だが左に印を付ける
       if(t.lead) body+='<div class="lead" style="height:'+Math.max(8,t.lead*PX_PER_MIN)+'px"></div>';
       const h=Math.max(MIN_CARD_H,(t.min||0)*PX_PER_MIN);
-      body+='<div class="task '+(t.done?'done':'')+'" style="min-height:'+h+'px" data-b="'+bi+'" data-t="'+ti+'">'+
-            '<div class="ttxt">'+esc(t.text)+'</div><div class="tmin">'+(t.min||0)+'分</div>'+
+      const r=resolvePreset(t.preset);   // 左端の色でどのプロジェクトの1手かを見せる
+      body+='<div class="task '+(t.done?'done':'')+'" style="min-height:'+h+'px'+(r&&r.p.color?';border-left:4px solid '+esc(r.p.color):'')+'" data-b="'+bi+'" data-t="'+ti+'">'+
+            '<div class="ttxt">'+esc(t.text)+(t.note?' <span class="tnote">· '+esc(t.note)+'</span>':'')+'</div>'+
+            '<div class="tmin">'+(r?esc(r.p.name)+' › '+esc(r.s.name)+' · ':'')+(t.min||0)+'分</div>'+
             '<button class="more" data-more="'+bi+':'+ti+'" aria-label="操作">&#8943;</button></div>';
       body+='<div class="buf" style="height:'+Math.max(6,buf*PX_PER_MIN)+'px"></div>';
     }
@@ -388,62 +465,92 @@ function setStatus(msg, isErr){
   s.textContent=msg; s.classList.toggle('err', !!isErr);
 }
 
-/* ---------- 置くシート ---------- */
-let sheetTargetBlock=null;
+/* ---------- 置くシート ----------
+   大（プロジェクト）→ 中（工程）→ 小（1手の型）の順に選び、補足を任意で 1 行足して置く。
+   自由記述だけで置く経路は作らない（何を書くか考え始めると止まるため）。箱の中身は「未分類」で置ける */
+let sheetTargetBlock=null, pick={p:null,s:null,x:null};
 function openSheet(bi){
-  sheetTargetBlock=bi;
-  const blocks=blocksFor(dayOffset);
-  document.getElementById('sheet-title').textContent=blocks[bi].label+' に置く';
-  const inbox=(plan.inbox||[]);
+  sheetTargetBlock=bi; pick={p:null,s:null,x:null};
+  renderPlaceSheet();
+  document.getElementById('sheet').hidden=false;
+}
+function renderPlaceSheet(){
+  const label=blocksFor(dayOffset)[sheetTargetBlock].label;
+  document.getElementById('sheet-title').textContent=label+' に置く';
+  const P=pick.p && projList().find(p=>p.id===pick.p);
+  const S=P && P.stages.find(s=>s.id===pick.s);
+  const X=S && S.presets.find(x=>x.id===pick.x);
   let h='';
-  if(inbox.length){
-    h+='<div class="sec">箱から</div>';
+  const inbox=(plan.inbox||[]);
+  if(inbox.length && !P){
+    h+='<div class="sec">箱から（未分類で置く）</div>';
     h+=inbox.map(i=>'<div class="row" data-pick-inbox="'+i.id+'">'+
         '<div class="rtxt">'+esc(i.text)+'</div><div class="rmin">—</div></div>').join('');
   }
-  h+='<div class="sec">型から</div>';
-  h+='<div class="cats">'+((presets&&presets.categories)||[]).map((c,ci)=>
-        '<button class="tab '+(ci===0?'on':'')+'" data-cat="'+ci+'">'+esc(c.name)+'</button>').join('')+'</div>';
-  h+='<div id="preset-list"></div>';
-  h+='<div class="sec">自由記述</div>'+
-     '<input type="text" id="free-text" placeholder="具体的に始められる動作で">'+
-     '<div style="display:flex;gap:8px;align-items:center;margin-top:8px">'+
-     '<input type="number" id="free-min" value="25" min="5" max="180" step="5" style="width:90px">'+
-     '<span class="rmin">分</span>'+
-     '<button class="btn pri" id="free-add" style="margin-left:auto">置く</button></div>';
+  h+='<div class="sec">型から — 大 → 中 → 小</div>';
+  if(P){
+    h+='<div class="crumbs"><button class="crumb" data-pk="root">すべて</button> › '+
+       (S ? '<button class="crumb" data-pk="p">'+esc(P.name)+'</button> › <b>'+esc(S.name)+'</b>' : '<b>'+esc(P.name)+'</b>')+'</div>';
+  }
+  if(!P){
+    // この枠向けのプロジェクトを先に並べる
+    const list=projList().filter(p=>!p.archived).slice()
+      .sort((a,b)=>((b.blocks||[]).indexOf(label)>=0)-((a.blocks||[]).indexOf(label)>=0));
+    h+=list.map(p=>{
+      const due=p.goal&&p.goal.due;
+      return '<div class="row" data-pk-p="'+esc(p.id)+'"><span class="dot" style="background:'+esc(p.color||'#888')+'"></span>'+
+        '<div class="rtxt">'+esc(p.name)+(p.draft?' <span class="badge">仮</span>':'')+
+        (due?'<div class="act">◆ '+md(due)+' · あと'+daysUntil(due)+'日</div>':'')+'</div>'+
+        ((p.blocks||[]).indexOf(label)>=0?'<span class="for">この枠向け</span>':'')+'<div class="rmin">›</div></div>';
+    }).join('') || '<div class="empty">プロジェクトがありません。「計画」から作ってください</div>';
+  }else if(!S){
+    const ord={late:0,active:1,cont:2,todo:3,done:4};
+    h+=P.stages.slice().sort((a,b)=>ord[stageStatus(P,a)]-ord[stageStatus(P,b)]).map(s=>{
+      const st=stageStatus(P,s);
+      const sub= st==='done' ? '完了 '+md(s.doneAt) : st==='cont' ? '継続' :
+                 st==='late' ? '期限切れ '+(-daysUntil(s.due))+'日' : (st==='todo'?'未着手 · ':'')+'期日 '+md(s.due)+' · あと'+daysUntil(s.due)+'日';
+      return '<div class="row '+(st==='done'?'dim':'')+'" data-pk-s="'+esc(s.id)+'"><div class="rtxt">'+esc(s.name)+
+        '<div class="act '+(st==='late'?'late':'')+'">'+sub+'</div></div><div class="rmin">›</div></div>';
+    }).join('') || '<div class="empty">工程がありません</div>';
+  }else{
+    h+=S.presets.map(x=>{
+      const id=P.id+'/'+S.id+'/'+x.id, a=actualsFor(id), m=median(a);
+      let extra='';
+      if(m!=null){
+        // 3回以上たまり、目安と5分以上ずれたときだけ更新を提案する（自動では変えない）
+        extra = (a.length>=3 && Math.abs(m-x.min)>=5)
+          ? '<div class="sug" data-est="'+esc(id)+':'+m+'">実績 '+m+'分 · '+a.length+'回 → 目安を'+m+'分に？</div>'
+          : '<div class="act">実績 '+m+'分 · '+a.length+'回</div>';
+      }
+      return '<div class="row '+(pick.x===x.id?'sel':'')+'" data-pk-x="'+esc(x.id)+'">'+
+        '<div class="rtxt">'+esc(x.text)+extra+'</div><div class="rmin">'+x.min+'分</div></div>';
+    }).join('') || '<div class="empty">型がありません。「計画」から足してください</div>';
+    if(X){
+      h+='<div class="placefoot"><input type="text" id="pk-note" maxlength="40" placeholder="補足（任意）: 対象を短く　例: 北側の橋">'+
+         '<button class="btn pri" id="pk-place" style="flex:none">置く</button></div>';
+    }
+  }
   document.getElementById('sheet-body').innerHTML=h;
-  renderPresetList(0);
-  document.getElementById('sheet').hidden=false;
-}
-function renderPresetList(ci){
-  currentCat=ci;
-  const cat=((presets&&presets.categories)||[])[ci];
-  document.getElementById('preset-list').innerHTML = cat
-    ? cat.presets.map(function(p){
-        const id=cat.id+'/'+p.id, a=actualsFor(id), md=median(a);
-        let extra='';
-        if(md!=null){
-          // 3回以上たまり、目安と5分以上ずれたときだけ更新を提案する（自動では変えない）
-          extra = (a.length>=3 && Math.abs(md-p.min)>=5)
-            ? '<div class="sug" data-est="'+id+':'+md+'">実績 '+md+'分 · '+a.length+'回 → 目安を'+md+'分に？</div>'
-            : '<div class="act">実績 '+md+'分 · '+a.length+'回</div>';
-        }
-        return '<div class="row" data-pick-preset="'+id+'">'+
-          '<div class="rtxt">'+esc(p.text)+extra+'</div><div class="rmin">'+p.min+'分</div></div>';
-      }).join('')
-    : '<div class="empty">型がありません</div>';
+  if(X){ const n=document.getElementById('pk-note'); n.scrollIntoView({block:'nearest'}); n.focus(); }
 }
 function closeSheet(){ document.getElementById('sheet').hidden=true; sheetTargetBlock=null; }
 
-function placeTask(text, min, presetId){
+function placeTask(text, min, presetId, note){
   const day=materialize(dayOffset);
   const blocks=blocksFor(dayOffset);
   const label=blocks[sheetTargetBlock].label;
   let b=day.blocks.find(x=>String(x.label).toLowerCase()===label.toLowerCase());
   if(!b){ b={label:label,s:blocks[sheetTargetBlock].s,e:blocks[sheetTargetBlock].e,tasks:[]}; day.blocks.push(b); }
   if(!Array.isArray(b.tasks)) b.tasks=[];
-  b.tasks.push({ id:uid(), preset:presetId||null, text:text, min:Number(min)||25, done:false });
+  const t={ id:uid(), preset:presetId||null, text:text, min:Number(min)||25, done:false };
+  if(note) t.note=note;
+  b.tasks.push(t);
   closeSheet(); markDirty(); render();
+}
+function placePicked(){
+  const r=resolvePreset(pick.p+'/'+pick.s+'/'+pick.x); if(!r) return;
+  const n=document.getElementById('pk-note');
+  placeTask(r.x.text, r.x.min, r.id, n ? n.value.trim() : '');
 }
 
 /* ---------- 動かす ---------- */
@@ -569,7 +676,7 @@ function markDirty(){
   saveTimer=setTimeout(save, 1500);
 }
 function cacheLocal(){
-  try{ localStorage.setItem(CACHE_KEY, JSON.stringify({plan:plan,presets:presets,shaPlan:shaPlan,at:Date.now()})); }catch(e){}
+  try{ localStorage.setItem(CACHE_KEY, JSON.stringify({plan:plan,projects:projects,shaPlan:shaPlan,at:Date.now()})); }catch(e){}
 }
 async function save(){
   if(!dirty || !cfg.token) return;
@@ -621,16 +728,24 @@ function buildRecord(bi,ti){
   const d=new Date(t.doneAt);
   const actual=(d.getHours()*60+d.getMinutes())-startMin;
   if(actual<1 || actual>240) return null;      // 明らかに実測でないものは欠測として捨てる
-  return { at:t.doneAt, date:ymd(dateAt(0)), block:v.label,
+  const rec={ at:t.doneAt, date:ymd(dateAt(0)), block:v.label,
            preset:t.preset||null, text:t.text, est:t.min||0, actual:actual };
+  if(t.note) rec.note=t.note;
+  return rec;
 }
+/* 旧 2 階層の id で記録された実績も、aliases で今の型に寄せて数える */
 function actualsFor(presetId){
   if(!timelogText || !presetId) return [];
+  const idx=presetIndex(), want=idx[presetId] ? idx[presetId].id : presetId;
   const out=[];
   const lines=timelogText.split('\n');
   for(let i=0;i<lines.length;i++){
     if(!lines[i].trim()) continue;
-    try{ const r=JSON.parse(lines[i]); if(r.preset===presetId && r.actual>0) out.push(r.actual); }catch(e){}
+    try{
+      const r=JSON.parse(lines[i]);
+      const got=r.preset && idx[r.preset] ? idx[r.preset].id : r.preset;
+      if(got===want && r.actual>0) out.push(r.actual);
+    }catch(e){}
   }
   return out.slice(-7);
 }
@@ -639,19 +754,22 @@ function median(a){
   const s=a.slice().sort(function(x,y){return x-y;}), m=Math.floor(s.length/2);
   return s.length%2 ? s[m] : Math.round((s[m-1]+s[m])/2);
 }
-/* 目安は自動で書き換えない。承認されたときだけ presets.json を更新する */
+/* 目安は自動で書き換えない。承認されたときだけ projects.json を更新する */
 async function applyEstimate(presetId, minutes){
-  const parts=presetId.split('/');
-  const c=presets.categories.find(function(x){return x.id===parts[0];});
-  const p=c && c.presets.find(function(x){return x.id===parts[1];});
-  if(!p) return;
-  p.min=minutes;
+  const r=resolvePreset(presetId);
+  if(!r) return;
+  const before=r.x.min;
+  r.x.min=minutes;
   try{
     setStatus('目安を更新中…');
-    shaPresets=await ghPut('presets.json', JSON.stringify(presets,null,2)+'\n', shaPresets, 'presets: 実績から目安を更新');
-    setStatus('「'+p.text.slice(0,16)+'」の目安を '+minutes+'分 にしました');
-  }catch(e){ setStatus(e.message, true); }
-  renderPresetList(currentCat);
+    shaProjects=await ghPut('projects.json', JSON.stringify(projects,null,2)+'\n', shaProjects, 'projects: 実績から目安を更新');
+    cacheLocal();
+    setStatus('「'+r.x.text.slice(0,16)+'」の目安を '+minutes+'分 にしました');
+  }catch(e){
+    r.x.min=before;
+    setStatus(e.conflict?'他の端末で計画が更新されています。再読み込みしてください':e.message, true);
+  }
+  renderPlaceSheet();
 }
 
 /* ---------- ntfy（予告の予約） ----------
@@ -700,7 +818,7 @@ async function syncNotifications(){
         const res=await ntfyPublish({
           topic:cfg.ntfy,
           title:'もうすぐ '+b.label+'（'+b.s+'）',
-          message: cfg.notifyIncludeTask ? open.text : '次の1手はプランに入っています',
+          message: cfg.notifyIncludeTask ? open.text+(open.note?' · '+open.note:'') : '次の1手はプランに入っています',
           delay:String(Math.floor(fire.getTime()/1000)),
           tags:['alarm_clock']
         });
@@ -717,12 +835,13 @@ async function loadAll(){
   if(!cfg.token){ setStatus('設定からトークンを入れてください', true); renderFromCache(); return; }
   try{
     setStatus('読み込み中…');
-    const res=await Promise.all([ghGet('plan.json'), ghGet('presets.json'), ghGet('timelog.jsonl')]);
+    const res=await Promise.all([ghGet('plan.json'), ghGet('projects.json'), ghGet('timelog.jsonl')]);
     const p=res[0], pr=res[1], tl=res[2];
     if(p.missing){ plan={version:1,days:{},inbox:[]}; shaPlan=null; }
     else { plan=JSON.parse(p.text); shaPlan=p.sha; }
-    if(pr.missing){ presets={bufferMin:5,categories:[]}; shaPresets=null; }
-    else { presets=JSON.parse(pr.text); shaPresets=pr.sha; }
+    if(pr.missing){ projects={version:2,bufferMin:5,projects:[]}; shaProjects=null; }
+    else { projects=JSON.parse(pr.text); shaProjects=pr.sha; }
+    if(!Array.isArray(projects.projects)) projects.projects=[];
     if(tl.missing){ timelogText=''; shaTimelog=null; }
     else { timelogText=tl.text; shaTimelog=tl.sha; }
     timelogDirty=false;
@@ -740,7 +859,7 @@ async function loadAll(){
 function renderFromCache(){
   try{
     const c=JSON.parse(localStorage.getItem(CACHE_KEY)||'null');
-    if(c && c.plan){ plan=c.plan; presets=c.presets; shaPlan=c.shaPlan; }
+    if(c && c.plan){ plan=c.plan; projects=c.projects||null; shaPlan=c.shaPlan; }
   }catch(e){}
   render();
 }
@@ -806,13 +925,7 @@ document.getElementById('sheet').addEventListener('click', function(e){
     if(op.indexOf('blk')===0) openBlockSheet(bi); else openTaskSheet(bi,ti);
     return;
   }
-  const cat=e.target.closest('[data-cat]');
-  if(cat){
-    const all=document.querySelectorAll('[data-cat]');
-    for(let i=0;i<all.length;i++) all[i].classList.remove('on');
-    cat.classList.add('on'); renderPresetList(Number(cat.dataset.cat)); return;
-  }
-  // 提案バッジは行より先に拾う（押しても配置してしまわないように）
+  // 提案バッジは行より先に拾う（押しても型を選んでしまわないように）
   const est=e.target.closest('[data-est]');
   if(est){
     e.stopPropagation();
@@ -820,14 +933,18 @@ document.getElementById('sheet').addEventListener('click', function(e){
     applyEstimate(q.slice(0,k), Number(q.slice(k+1)));
     return;
   }
-  const pp=e.target.closest('[data-pick-preset]');
-  if(pp){
-    const parts=pp.dataset.pickPreset.split('/');
-    const c=presets.categories.find(x=>x.id===parts[0]);
-    const p=c && c.presets.find(x=>x.id===parts[1]);
-    if(p) placeTask(p.text, p.min, parts[0]+'/'+parts[1]);
-    return;
+  const crumb=e.target.closest('[data-pk]');
+  if(crumb){
+    if(crumb.dataset.pk==='root') pick={p:null,s:null,x:null}; else pick={p:pick.p,s:null,x:null};
+    renderPlaceSheet(); return;
   }
+  const pp=e.target.closest('[data-pk-p]');
+  if(pp){ pick={p:pp.dataset.pkP,s:null,x:null}; renderPlaceSheet(); return; }
+  const ps=e.target.closest('[data-pk-s]');
+  if(ps){ pick.s=ps.dataset.pkS; pick.x=null; renderPlaceSheet(); return; }
+  const px=e.target.closest('[data-pk-x]');
+  if(px){ pick.x=px.dataset.pkX; renderPlaceSheet(); return; }
+  if(e.target.id==='pk-place'){ placePicked(); return; }
   const pi=e.target.closest('[data-pick-inbox]');
   if(pi){
     const id=pi.dataset.pickInbox;
@@ -835,14 +952,184 @@ document.getElementById('sheet').addEventListener('click', function(e){
     if(item){ plan.inbox=plan.inbox.filter(x=>x.id!==id); placeTask(item.text, 25, null); }
     return;
   }
-  if(e.target.id==='free-add'){
-    const txt=document.getElementById('free-text').value.trim();
-    if(!txt){ document.getElementById('free-text').focus(); return; }
-    placeTask(txt, document.getElementById('free-min').value, null);
-  }
+});
+document.getElementById('sheet').addEventListener('keydown', function(e){
+  if(e.key==='Enter' && e.target.id==='pk-note' && !e.isComposing){ e.preventDefault(); placePicked(); }
 });
 document.getElementById('sheet-close').addEventListener('click', closeSheet);
 document.getElementById('reload-btn').addEventListener('click', loadAll);
+
+/* ---------- 計画（projects.json の編集。週次レビュー用） ----------
+   day-clock はこれを読むだけ。id は型の id（大/中/小）になるので、作ったら変えない＝名前は自由に直せる */
+const planEl=document.getElementById('plan');
+let ed=null, edErr='';
+const BLOCK_LABELS=(function(){ const s=[]; for(const k in BASE_SCHEDULE) for(const b of BASE_SCHEDULE[k]) if(s.indexOf(b.label)<0) s.push(b.label); return s; })();
+const val=v=>esc(v==null?'':String(v)).replace(/"/g,'&quot;');
+const fld=(label,input)=>'<div><label class="f">'+label+'</label>'+input+'</div>';
+function newStage(){ return {id:uid(), name:'', due:null, criteria:'', doneAt:null, evidence:'', presets:[newPreset()]}; }
+function newPreset(){ return {id:uid(), text:'', min:15}; }
+
+function openPlan(){ ed=null; edErr=''; renderPlan(); planEl.hidden=false; }
+function renderPlan(){
+  const body=document.getElementById('plan-body'), title=document.getElementById('plan-title');
+  if(!projects){ title.textContent='計画'; body.innerHTML='<div class="empty">読み込み前です。設定からトークンを入れてください</div>'; return; }
+  if(!ed){
+    title.textContent='計画';
+    const row=p=>{
+      const ms=(p.stages||[]).filter(s=>s.due), dn=ms.filter(s=>s.doneAt).length;
+      return '<div class="row" data-ed="'+esc(p.id)+'"><span class="dot" style="background:'+esc(p.color||'#888')+'"></span>'+
+        '<div class="rtxt">'+esc(p.name)+(p.draft?' <span class="badge">仮</span>':'')+
+        '<div class="act">'+(p.goal&&p.goal.due?'◆ '+md(p.goal.due)+' · ':'')+esc((p.goal&&p.goal.text)||'ゴール未設定')+'</div></div>'+
+        '<div class="rmin">'+(ms.length?dn+'/'+ms.length+' 工程':'継続のみ')+' ›</div></div>';
+    };
+    const act=projList().filter(p=>!p.archived), arc=projList().filter(p=>p.archived);
+    body.innerHTML=(act.map(row).join('')||'<div class="empty">プロジェクトがありません</div>')+
+      '<button class="add" data-ed-new="1">＋ プロジェクトを追加</button>'+
+      (arc.length?'<div class="sec">アーカイブ</div>'+arc.map(row).join(''):'')+
+      '<p class="hint">週次レビューで見直す。工程の完了は、完了条件に対する証拠を書いてから。'+
+      '「仮」は初期案のまま見直していないもの。開いて保存すると外れる。</p>';
+    return;
+  }
+  title.textContent=ed.name||'新しいプロジェクト';
+  let h='<button class="btn" data-ed-op="back">← 一覧</button>';
+  if(ed.draft) h+='<p class="hint warnbox">この計画は仮の案です。見直して保存すると「仮」が外れます。</p>';
+  h+=fld('名前','<input type="text" data-f="name" value="'+val(ed.name)+'">');
+  h+=fld('ゴール（最終成果物）','<input type="text" data-f="goal.text" value="'+val(ed.goal.text)+'" placeholder="例: ワールドを VRChat に公開する">');
+  h+='<div class="grid2">'+fld('期限','<input type="date" data-f="goal.due" value="'+val(ed.goal.due)+'">')+
+     fld('始めた日','<input type="date" data-f="start" value="'+val(ed.start)+'">')+'</div>';
+  h+='<div class="grid2">'+fld('週の目標（分）','<input type="number" min="0" max="3000" step="10" data-f="weekly.min" value="'+val(ed.weekly.min)+'">')+
+     fld('週の目標（回）','<input type="number" min="0" max="100" step="1" data-f="weekly.count" value="'+val(ed.weekly.count)+'">')+'</div>';
+  h+='<div class="grid2">'+fld('色','<input type="color" data-f="color" value="'+val(ed.color||'#8d97ab')+'">')+'<div></div></div>';
+  h+=fld('出しやすいブロック（置くときに先頭に並ぶ）','<div class="chips">'+BLOCK_LABELS.map(l=>
+       '<label class="chip"><input type="checkbox" data-f="blocks" value="'+val(l)+'" '+(ed.blocks.indexOf(l)>=0?'checked':'')+'>'+esc(l)+'</label>').join('')+'</div>');
+  h+='<div class="sec">工程（中）と 1手の型（小）</div>';
+  ed.stages.forEach((s,si)=>{ h+=stageEditor(s,si); });
+  h+='<button class="add" data-ed-op="stage-add">＋ 工程を追加</button>';
+  h+='<div class="edfoot">'+(edErr?'<div class="err">'+esc(edErr)+'</div>':'')+
+     '<button class="btn pri" data-ed-op="save">保存</button>'+
+     '<button class="btn" data-ed-op="archive">'+(ed.archived?'アーカイブから戻す':'アーカイブ')+'</button></div>';
+  document.getElementById('plan-body').innerHTML=h;
+}
+function stageEditor(s,si){
+  let h='<div class="stage'+(s.doneAt?' done':'')+'">';
+  h+='<div class="srow"><input type="text" data-f="s:'+si+':name" value="'+val(s.name)+'" placeholder="工程の名前（例: ブロックアウト）">'+
+     '<button class="mini" data-ed-op="stage-up:'+si+'" aria-label="上へ">↑</button>'+
+     '<button class="mini" data-ed-op="stage-down:'+si+'" aria-label="下へ">↓</button>'+
+     '<button class="mini" data-ed-op="stage-del:'+si+'" aria-label="工程を削除">×</button></div>';
+  h+=fld('期日（空 = 期日のない継続の練習）','<input type="date" data-f="s:'+si+':due" value="'+val(s.due)+'">');
+  if(s.due){
+    h+=fld('完了条件（何ができたら終わりか。物理的な証拠で）','<input type="text" data-f="s:'+si+':criteria" value="'+val(s.criteria)+'">');
+    if(s.doneAt){
+      h+='<div class="donebox">完了 '+md(s.doneAt)+' · 証拠: '+esc(s.evidence)+
+         '<button class="mini" data-ed-op="stage-undone:'+si+'" style="margin-left:auto">取り消す</button></div>';
+    }else{
+      h+='<div class="donebox"><input type="text" data-f="s:'+si+':evidence" value="'+val(s.evidence)+'" placeholder="証拠（例: 書き出したファイル名・スクショ）">'+
+         '<button class="mini" data-ed-op="stage-done:'+si+'">完了にする</button></div>';
+    }
+  }
+  s.presets.forEach((x,xi)=>{
+    h+='<div class="prow"><input type="text" data-f="x:'+si+':'+xi+':text" value="'+val(x.text)+'" placeholder="身体が始められる動作で、量は1">'+
+       '<input type="number" min="1" max="240" data-f="x:'+si+':'+xi+':min" value="'+val(x.min)+'"><span class="rmin">分</span>'+
+       '<button class="mini" data-ed-op="preset-del:'+si+':'+xi+'" aria-label="型を削除">×</button></div>';
+  });
+  h+='<button class="add small" data-ed-op="preset-add:'+si+'">＋ 型を追加</button></div>';
+  return h;
+}
+/* 入力は ed に写すだけ（再描画するとフォーカスが外れるため） */
+function onPlanInput(e){
+  const k=e.target.dataset && e.target.dataset.f; if(!k || !ed) return;
+  const v=e.target.value;
+  if(k==='blocks'){ ed.blocks=Array.prototype.map.call(planEl.querySelectorAll('[data-f=blocks]:checked'),x=>x.value); return; }
+  const p=k.split(':');
+  if(p[0]==='s'){
+    const s=ed.stages[Number(p[1])];
+    if(p[2]==='due'){ const had=!!s.due; s.due=v||null; if(had!==!!s.due) renderPlan(); }   // 期日の有無で欄が変わる
+    else s[p[2]]=v;
+    return;
+  }
+  if(p[0]==='x'){ const x=ed.stages[Number(p[1])].presets[Number(p[2])]; x[p[3]] = p[3]==='min' ? Number(v) : v; return; }
+  if(k==='goal.text') ed.goal.text=v;
+  else if(k==='goal.due') ed.goal.due=v||null;
+  else if(k==='weekly.min') ed.weekly.min=Math.max(0,Number(v)||0);
+  else if(k==='weekly.count') ed.weekly.count=Math.max(0,Number(v)||0);
+  else ed[k]=v;
+}
+planEl.addEventListener('input', onPlanInput);
+planEl.addEventListener('change', onPlanInput);
+
+function validateEd(){
+  if(!String(ed.name).trim()) return '名前を入れてください';
+  if(!ed.stages.length) return '工程を1つ以上作ってください';
+  for(const s of ed.stages){
+    if(!String(s.name).trim()) return '名前の無い工程があります';
+    if(!s.presets.length) return '「'+s.name+'」に型がありません';
+    for(const x of s.presets){
+      if(!String(x.text).trim()) return '「'+s.name+'」に文言の無い型があります';
+      if(!(x.min>=1 && x.min<=240)) return '「'+String(x.text).slice(0,12)+'」の分数は 1〜240 で';
+    }
+  }
+  return '';
+}
+async function savePlanEdit(){
+  if(!cfg.token){ edErr='設定からトークンを入れてください'; renderPlan(); return; }
+  edErr=validateEd();
+  if(edErr){ renderPlan(); return; }
+  const copy=JSON.parse(JSON.stringify(ed));
+  copy.name=copy.name.trim();
+  copy.goal.text=String(copy.goal.text||'').trim();
+  for(const s of copy.stages){
+    s.name=s.name.trim(); s.criteria=String(s.criteria||'').trim();
+    if(!s.due){ s.criteria=''; s.doneAt=null; s.evidence=''; }   // 継続の練習に完了は無い
+    for(const x of s.presets) x.text=x.text.trim();
+  }
+  delete copy.draft;
+  const list=projects.projects, i=list.findIndex(p=>p.id===copy.id), orig=i>=0?list[i]:null;
+  if(i>=0) list[i]=copy; else list.push(copy);
+  try{
+    setStatus('計画を保存中…');
+    shaProjects=await ghPut('projects.json', JSON.stringify(projects,null,2)+'\n', shaProjects, 'projects: 計画を更新（'+copy.name+'）');
+    cacheLocal();
+    setStatus('計画を保存しました（'+copy.name+'）');
+    ed=null; edErr=''; renderPlan(); render();
+  }catch(e){
+    if(i>=0) list[i]=orig; else list.pop();
+    edErr=e.conflict?'他の端末で計画が更新されています。閉じて再読み込みしてから、もう一度直してください':e.message;
+    renderPlan();
+  }
+}
+planEl.addEventListener('click', function(e){
+  if(e.target.id==='plan'){ planEl.hidden=true; return; }
+  const open=e.target.closest('[data-ed]');
+  if(open){ const p=projList().find(x=>x.id===open.dataset.ed); if(p){ ed=JSON.parse(JSON.stringify(p)); edErr='';
+    ed.goal=ed.goal||{text:'',due:null}; ed.weekly=ed.weekly||{min:0,count:0}; ed.blocks=ed.blocks||[]; ed.stages=ed.stages||[];
+    renderPlan(); planEl.querySelector('.panel').scrollTop=0; } return; }
+  if(e.target.closest('[data-ed-new]')){
+    ed={id:uid(), name:'', color:'#8d97ab', blocks:[], start:ymd(new Date()), archived:false,
+        goal:{text:'',due:null}, weekly:{min:0,count:0}, stages:[newStage()]};
+    edErr=''; renderPlan(); return;
+  }
+  const b=e.target.closest('[data-ed-op]'); if(!b || !ed) return;
+  const p=b.dataset.edOp.split(':'), op=p[0], si=Number(p[1]), xi=Number(p[2]);
+  const S=ed.stages;
+  if(op==='back'){ ed=null; edErr=''; renderPlan(); return; }
+  if(op==='save'){ savePlanEdit(); return; }
+  if(op==='archive'){ ed.archived=!ed.archived; savePlanEdit(); return; }
+  if(op==='stage-add') S.push(newStage());
+  else if(op==='stage-up' && si>0){ const t=S[si]; S[si]=S[si-1]; S[si-1]=t; }
+  else if(op==='stage-down' && si<S.length-1){ const t=S[si]; S[si]=S[si+1]; S[si+1]=t; }
+  else if(op==='stage-del'){ if(!confirm('工程「'+(S[si].name||'（名前なし）')+'」を削除しますか？\n過去の1手はプロジェクトの記録としては残ります')) return; S.splice(si,1); }
+  else if(op==='stage-done'){
+    // 証拠が無いものは完了にしない（「理解した」「だいたいできた」で閉じないため）
+    if(!String(S[si].evidence||'').trim()){ edErr='「'+S[si].name+'」の証拠を書いてから完了にしてください'; renderPlan(); return; }
+    S[si].doneAt=ymd(new Date());
+  }
+  else if(op==='stage-undone'){ S[si].doneAt=null; }
+  else if(op==='preset-add') S[si].presets.push(newPreset());
+  else if(op==='preset-del') S[si].presets.splice(xi,1);
+  edErr=''; renderPlan();
+});
+document.getElementById('plan-btn').addEventListener('click', openPlan);
+document.getElementById('plan-close').addEventListener('click', function(){ planEl.hidden=true; });
 
 /* 設定 */
 const stEl=document.getElementById('settings');
