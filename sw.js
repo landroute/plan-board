@@ -1,6 +1,6 @@
 /* 板 — オフラインでも開けるようにアプリシェルを持つ。
    GitHub API（別オリジン）には一切触らない＝認証付きリクエストをキャッシュしない */
-const CACHE = 'board-v2';
+const CACHE = 'board-v3';
 const SHELL = ['./', './index.html', './manifest.webmanifest',
                './icon.svg', './icon-192.png', './icon-512.png'];
 
