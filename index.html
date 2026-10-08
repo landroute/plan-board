@@ -984,7 +984,7 @@ const BLOCK_LABELS=(function(){ const s=[]; for(const k in BASE_SCHEDULE) for(co
 const val=v=>esc(v==null?'':String(v)).replace(/"/g,'&quot;');
 const fld=(label,input)=>'<div><label class="f">'+label+'</label>'+input+'</div>';
 function newStage(){ return {id:uid(), name:'', due:null, criteria:'', doneAt:null, evidence:'', presets:[newPreset()]}; }
-function newPreset(){ return {id:uid(), text:'', min:15}; }
+function newPreset(){ return {id:uid(), text:'', min:15, isNew:true}; }   // isNew: 保存のときに空なら捨てる印（保存前に外す）
 
 function openPlan(){ ed=null; es=null; edErr=''; renderPlan(); planEl.hidden=false; }
 function renderPlan(){
@@ -1113,6 +1113,9 @@ function validateEd(){
 }
 async function savePlanEdit(){
   if(!cfg.token){ edErr='設定からトークンを入れてください'; renderPlan(); return; }
+  // 「＋ 型を追加」を押したまま空で残った行（新しい工程の最初の 1 行も）は、型ではないので捨てる。
+  // 前からある型を空にしたものは捨てない（黙って型を消すことになるため。検証で止める）
+  for(const s of ed.stages) s.presets=s.presets.filter(x=>!(x.isNew && !String(x.text).trim()));
   const bad=validateEd();
   if(bad){ es=bad.si; edErr=bad.msg; renderPlan(); return; }   // 名前が空ならプロジェクトの設定は開いた状態で出る
   edErr='';
@@ -1122,7 +1125,7 @@ async function savePlanEdit(){
   for(const s of copy.stages){
     s.name=s.name.trim(); s.criteria=String(s.criteria||'').trim();
     if(!s.due){ s.criteria=''; s.doneAt=null; s.evidence=''; }   // 継続の練習に完了は無い
-    for(const x of s.presets) x.text=x.text.trim();
+    for(const x of s.presets){ x.text=x.text.trim(); delete x.isNew; }
   }
   delete copy.draft;
   const list=projects.projects, i=list.findIndex(p=>p.id===copy.id), orig=i>=0?list[i]:null;
@@ -1171,7 +1174,12 @@ planEl.addEventListener('click', function(e){
     S[si].doneAt=ymd(new Date());
   }
   else if(op==='stage-undone'){ S[si].doneAt=null; }
-  else if(op==='preset-add') S[si].presets.push(newPreset());
+  else if(op==='preset-add'){
+    S[si].presets.push(newPreset()); edErr=''; renderPlan();
+    // 足した行にそのまま書けるように、文言の欄へカーソルを移す
+    const f=planEl.querySelector('[data-f="x:'+si+':'+(S[si].presets.length-1)+':text"]'); if(f) f.focus();
+    return;
+  }
   else if(op==='preset-del') S[si].presets.splice(xi,1);
   edErr=''; renderPlan();
 });
