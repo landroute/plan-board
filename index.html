@@ -141,10 +141,8 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 4px}
   background:var(--warn-soft);color:var(--warn);font-variant-numeric:tabular-nums;cursor:pointer;
 }
 .empty{color:var(--faint);font-size:13px;padding:20px 0;text-align:center}
-input[type=date]{
-  width:100%;padding:9px 10px;border-radius:8px;border:1px solid var(--line);
-  background:var(--surface2);color:var(--text);font-size:15px;font-family:inherit;
-}
+input.bad{outline:1.5px solid var(--warn);border-color:transparent}
+input::placeholder{color:var(--faint)}
 input[type=color]{width:100%;height:42px;padding:3px;border-radius:8px;border:1px solid var(--line);background:var(--surface2)}
 @media (min-width:800px){ .panel{max-width:760px;margin:0 auto} }
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;flex:none}
@@ -1036,8 +1034,8 @@ function projectLevel(){
   h+='<details class="psettings"'+(ed.name?'':' open')+'><summary>プロジェクトの設定 — 名前・ゴール・期限・週の目標・色</summary>';
   h+=fld('名前','<input type="text" data-f="name" value="'+val(ed.name)+'">');
   h+=fld('ゴール（最終成果物）','<input type="text" data-f="goal.text" value="'+val(ed.goal.text)+'" placeholder="例: ワールドを VRChat に公開する">');
-  h+='<div class="grid2">'+fld('期限','<input type="date" data-f="goal.due" value="'+val(ed.goal.due)+'">')+
-     fld('始めた日','<input type="date" data-f="start" value="'+val(ed.start)+'">')+'</div>';
+  h+='<div class="grid2">'+fld('期限',dateIn('goal.due',ed.goal.due))+
+     fld('始めた日',dateIn('start',ed.start))+'</div>';
   h+='<div class="grid2">'+fld('週の目標（分）','<input type="number" min="0" max="3000" step="10" data-f="weekly.min" value="'+val(ed.weekly.min)+'">')+
      fld('週の目標（回）','<input type="number" min="0" max="100" step="1" data-f="weekly.count" value="'+val(ed.weekly.count)+'">')+'</div>';
   h+='<div class="grid2">'+fld('色','<input type="color" data-f="color" value="'+val(ed.color||'#8d97ab')+'">')+'<div></div></div>';
@@ -1053,7 +1051,7 @@ function stageEditor(s,si){
      '<button class="mini" data-ed-op="stage-up:'+si+'" aria-label="前の工程と入れ替える">↑</button>'+
      '<button class="mini" data-ed-op="stage-down:'+si+'" aria-label="後の工程と入れ替える">↓</button>'+
      '<button class="mini" data-ed-op="stage-del:'+si+'" aria-label="工程を削除">×</button></div>';
-  h+=fld('期日（空 = 期日のない継続の練習）','<input type="date" data-f="s:'+si+':due" value="'+val(s.due)+'">');
+  h+=fld('期日（空 = 期日のない継続の練習）',dateIn('s:'+si+':due',s.due));
   if(s.due){
     h+=fld('完了条件（何ができたら終わりか。物理的な証拠で）','<input type="text" data-f="s:'+si+':criteria" value="'+val(s.criteria)+'">');
     if(s.doneAt){
@@ -1074,21 +1072,62 @@ function stageEditor(s,si){
   h+='<button class="add small" data-ed-op="preset-add:'+si+'">＋ 型を追加</button>';
   return h;
 }
+/* 日付は文字で打つ（欄に薄く YYYY/MM/DD）。type="date" は年・月・日の枠に分かれて打ちにくく、
+   Chrome では 8 桁続けて打つと年に 6 桁入った（max を付けても端末によって直らなかった）。
+   受け付ける形: 20261115 / 2026/11/15 / 2026-11-15 / 2026.11.15 / 1115・11/15（今年）。ed には YYYY-MM-DD で持つ */
+function parseDateIn(t){
+  t=String(t).trim(); if(!t) return {ok:true, v:null};
+  let m, y=new Date().getFullYear(), mo, d;
+  if((m=t.match(/^(\d{4})(\d{2})(\d{2})$/)) || (m=t.match(/^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})$/))){ y=+m[1]; mo=+m[2]; d=+m[3]; }
+  else if((m=t.match(/^(\d{2})(\d{2})$/)) || (m=t.match(/^(\d{1,2})[\/\-.](\d{1,2})$/))){ mo=+m[1]; d=+m[2]; }
+  else return {ok:false};
+  const dt=new Date(y,mo-1,d);
+  if(dt.getFullYear()!==y || dt.getMonth()!==mo-1 || dt.getDate()!==d) return {ok:false};
+  return {ok:true, v:ymd(dt)};
+}
+let edRaw={};   // 日付として読めなかった文字（欄のキー → 打った文字）。描き直しても消さず、保存の検証で止める
+const dateIn=(f,v)=>{
+  const raw=edRaw[f];
+  return '<input type="text" inputmode="numeric" autocomplete="off" maxlength="10" placeholder="YYYY/MM/DD" data-date="1"'+
+    (raw!=null?' class="bad"':'')+' data-f="'+f+'" value="'+val(raw!=null?raw:(v?String(v).replace(/-/g,'/'):''))+'">';
+};
+function setDateField(k,v){
+  const p=k.split(':');
+  if(p[0]==='s') ed.stages[Number(p[1])].due=v;
+  else if(k==='goal.due') ed.goal.due=v;
+  else if(k==='start') ed.start=v;
+}
 /* 入力は ed に写すだけ（再描画するとフォーカスが外れるため） */
 function onPlanInput(e){
   const k=e.target.dataset && e.target.dataset.f; if(!k || !ed) return;
   const v=e.target.value;
+  if(e.target.dataset.date){
+    const r=parseDateIn(v);
+    if(!r.ok){
+      // 打っている途中は何もしない。欄を離れたときに読めなければ印を付ける
+      if(e.type==='change'){ edRaw[k]=v; e.target.classList.add('bad'); }
+      return;
+    }
+    delete edRaw[k]; e.target.classList.remove('bad');
+    setDateField(k, r.v);
+    // 8 桁そろった・欄を離れた ときは、形を YYYY/MM/DD にそろえる
+    if(r.v && (e.type==='change' || /^\d{8}$/.test(v))) e.target.value=r.v.replace(/-/g,'/');
+    // 工程の期日の有無で、完了条件の欄が出る・消える。打っている途中で描き直すとカーソルが外れるので、欄を離れたときだけ
+    if(e.type==='change' && k.indexOf('s:')===0){
+      const si=k.split(':')[1];
+      if(!!ed.stages[Number(si)].due !== !!planEl.querySelector('[data-f="s:'+si+':criteria"]')) renderPlan();
+    }
+    return;
+  }
   if(k==='blocks'){ ed.blocks=Array.prototype.map.call(planEl.querySelectorAll('[data-f=blocks]:checked'),x=>x.value); return; }
   const p=k.split(':');
   if(p[0]==='s'){
     const s=ed.stages[Number(p[1])];
-    if(p[2]==='due'){ const had=!!s.due; s.due=v||null; if(had!==!!s.due) renderPlan(); }   // 期日の有無で欄が変わる
-    else s[p[2]]=v;
+    s[p[2]]=v;
     return;
   }
   if(p[0]==='x'){ const x=ed.stages[Number(p[1])].presets[Number(p[2])]; x[p[3]] = p[3]==='min' ? Number(v) : v; return; }
   if(k==='goal.text') ed.goal.text=v;
-  else if(k==='goal.due') ed.goal.due=v||null;
   else if(k==='weekly.min') ed.weekly.min=Math.max(0,Number(v)||0);
   else if(k==='weekly.count') ed.weekly.count=Math.max(0,Number(v)||0);
   else ed[k]=v;
@@ -1100,10 +1139,11 @@ planEl.addEventListener('change', onPlanInput);
 function validateEd(){
   if(!String(ed.name).trim()) return {msg:'名前を入れてください（プロジェクトの設定）', si:null};
   if(!ed.stages.length) return {msg:'工程を1つ以上作ってください', si:null};
+  const bad=Object.keys(edRaw)[0];
+  if(bad) return {msg:'日付は YYYY/MM/DD で（例: 2026/11/15）', si: bad.indexOf('s:')===0 ? Number(bad.split(':')[1]) : null};
   for(let si=0; si<ed.stages.length; si++){
     const s=ed.stages[si];
     if(!String(s.name).trim()) return {msg:'工程の名前を入れてください', si};
-    if(!s.presets.length) return {msg:'「'+s.name+'」に型がありません', si};
     for(const x of s.presets){
       if(!String(x.text).trim()) return {msg:'「'+s.name+'」に文言の無い型があります', si};
       if(!(x.min>=1 && x.min<=240)) return {msg:'「'+String(x.text).slice(0,12)+'」の分数は 1〜240 で', si};
@@ -1135,7 +1175,7 @@ async function savePlanEdit(){
     shaProjects=await ghPut('projects.json', JSON.stringify(projects,null,2)+'\n', shaProjects, 'projects: 計画を更新（'+copy.name+'）');
     cacheLocal();
     setStatus('計画を保存しました（'+copy.name+'）');
-    ed=null; es=null; edErr=''; renderPlan(); render();
+    ed=null; es=null; edErr=''; edRaw={}; renderPlan(); render();
   }catch(e){
     if(i>=0) list[i]=orig; else list.pop();
     edErr=e.conflict?'他の端末で計画が更新されています。閉じて再読み込みしてから、もう一度直してください':e.message;
@@ -1147,18 +1187,18 @@ planEl.addEventListener('click', function(e){
   const open=e.target.closest('[data-ed]');
   if(open){ const p=projList().find(x=>x.id===open.dataset.ed); if(p){ ed=JSON.parse(JSON.stringify(p)); edErr='';
     ed.goal=ed.goal||{text:'',due:null}; ed.weekly=ed.weekly||{min:0,count:0}; ed.blocks=ed.blocks||[]; ed.stages=ed.stages||[];
-    edOrig=JSON.stringify(ed); edGo(null); } return; }
+    edOrig=JSON.stringify(ed); edRaw={}; edGo(null); } return; }
   if(e.target.closest('[data-ed-new]')){
     ed={id:uid(), name:'', color:'#8d97ab', blocks:[], start:ymd(new Date()), archived:false,
         goal:{text:'',due:null}, weekly:{min:0,count:0}, stages:[]};
-    edOrig=''; edGo(null); return;
+    edOrig=''; edRaw={}; edGo(null); return;
   }
   const b=e.target.closest('[data-ed-op]'); if(!b || !ed) return;
   const p=b.dataset.edOp.split(':'), op=p[0], si=Number(p[1]), xi=Number(p[2]);
   const S=ed.stages;
   if(op==='back'){
     if(edChanged() && !confirm('保存していない変更があります。捨てて一覧に戻りますか？')) return;
-    ed=null; es=null; edErr=''; renderPlan(); return;
+    ed=null; es=null; edErr=''; edRaw={}; renderPlan(); return;
   }
   if(op==='proj'){ edGo(null); return; }
   if(op==='stage-open'){ edGo(si); return; }
