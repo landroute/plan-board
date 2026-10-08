@@ -175,6 +175,10 @@ input[type=checkbox]{accent-color:var(--accent)}
   border-top:1px solid var(--line);margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .edfoot .err{width:100%;color:var(--warn);font-size:13px}
 .warnbox{background:var(--warn-soft);color:var(--warn);padding:8px 10px;border-radius:8px}
+.psettings{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}
+.psettings summary{cursor:pointer;font-size:13px;color:var(--muted);padding:4px 0}
+.unsaved{font-size:12px;color:var(--warn);margin-left:auto}
+.crumbs b{color:var(--text);font-weight:600}
 .textbtn{flex:none;height:36px;padding:0 12px;border-radius:8px;border:1px solid var(--accent);
   background:transparent;color:var(--accent);font-size:13px;cursor:pointer}
 </style>
@@ -973,14 +977,16 @@ document.getElementById('reload-btn').addEventListener('click', loadAll);
 /* ---------- 計画（projects.json の編集。週次レビュー用） ----------
    day-clock はこれを読むだけ。id は型の id（大/中/小）になるので、作ったら変えない＝名前は自由に直せる */
 const planEl=document.getElementById('plan');
-let ed=null, edErr='';
+let ed=null, edErr='', es=null, edOrig='';   // es = いま開いている工程（null なら大の段）。edOrig = 開いたときの中身
+const edChanged=()=>!!ed && JSON.stringify(ed)!==edOrig;
+function edGo(si){ es=si; edErr=''; renderPlan(); planEl.querySelector('.panel').scrollTop=0; }
 const BLOCK_LABELS=(function(){ const s=[]; for(const k in BASE_SCHEDULE) for(const b of BASE_SCHEDULE[k]) if(s.indexOf(b.label)<0) s.push(b.label); return s; })();
 const val=v=>esc(v==null?'':String(v)).replace(/"/g,'&quot;');
 const fld=(label,input)=>'<div><label class="f">'+label+'</label>'+input+'</div>';
 function newStage(){ return {id:uid(), name:'', due:null, criteria:'', doneAt:null, evidence:'', presets:[newPreset()]}; }
 function newPreset(){ return {id:uid(), text:'', min:15}; }
 
-function openPlan(){ ed=null; edErr=''; renderPlan(); planEl.hidden=false; }
+function openPlan(){ ed=null; es=null; edErr=''; renderPlan(); planEl.hidden=false; }
 function renderPlan(){
   const body=document.getElementById('plan-body'), title=document.getElementById('plan-title');
   if(!projects){ title.textContent='計画'; body.innerHTML='<div class="empty">読み込み前です。設定からトークンを入れてください</div>'; return; }
@@ -1001,9 +1007,33 @@ function renderPlan(){
       '「仮」は初期案のまま見直していないもの。開いて保存すると外れる。</p>';
     return;
   }
-  title.textContent=ed.name||'新しいプロジェクト';
-  let h='<button class="btn" data-ed-op="back">← 一覧</button>';
+  // 置くときと同じく 大 → 中 → 小 の順にたどる。保存はプロジェクト単位で、どの段からでもできる
+  const pname=ed.name||'新しいプロジェクト', S=ed.stages[es];
+  title.textContent=S ? (S.name||'新しい工程') : pname;
+  let h='<div class="crumbs"><button class="crumb" data-ed-op="back">計画</button>›'+
+        (S ? '<button class="crumb" data-ed-op="proj">'+esc(pname)+'</button>›<b>'+esc(S.name||'新しい工程')+'</b>'
+           : '<b>'+esc(pname)+'</b>')+'</div>';
   if(ed.draft) h+='<p class="hint warnbox">この計画は仮の案です。見直して保存すると「仮」が外れます。</p>';
+  h+= S ? stageEditor(S, es) : projectLevel();
+  h+='<div class="edfoot">'+(edErr?'<div class="err">'+esc(edErr)+'</div>':'')+
+     '<button class="btn pri" data-ed-op="save">保存</button>'+
+     (S ? '<button class="btn" data-ed-op="proj">← 工程の一覧</button>'
+        : '<button class="btn" data-ed-op="archive">'+(ed.archived?'アーカイブから戻す':'アーカイブ')+'</button>')+
+     (edChanged() ? '<span class="unsaved">未保存の変更あり</span>' : '')+'</div>';
+  body.innerHTML=h;
+}
+/* 大（プロジェクト）の段: 工程の一覧が主役。プロジェクト自体の設定は下にたたむ（名前が無い＝新規のときだけ開く） */
+const ST_TXT={done:'完了', active:'進行中', late:'期限切れ', todo:'未着手', cont:'継続の練習'};
+function projectLevel(){
+  let h='<div class="sec">中 · 工程</div>';
+  h+=ed.stages.map((s,si)=>{
+    const st=stageStatus(ed,s), n=(s.presets||[]).length;
+    const when=s.doneAt ? '完了 '+md(s.doneAt) : s.due ? ST_TXT[st]+' · 期日 '+md(s.due) : '継続の練習（期日なし）';
+    return '<div class="row'+(s.doneAt?' dim':'')+'" data-ed-op="stage-open:'+si+'"><div class="rtxt">'+esc(s.name||'（名前なし）')+
+      '<div class="act'+(st==='late'?' late':'')+'">'+when+'</div></div><div class="rmin">型 '+n+' ›</div></div>';
+  }).join('') || '<div class="empty">工程がありません</div>';
+  h+='<button class="add" data-ed-op="stage-add">＋ 工程を追加</button>';
+  h+='<details class="psettings"'+(ed.name?'':' open')+'><summary>プロジェクトの設定 — 名前・ゴール・期限・週の目標・色</summary>';
   h+=fld('名前','<input type="text" data-f="name" value="'+val(ed.name)+'">');
   h+=fld('ゴール（最終成果物）','<input type="text" data-f="goal.text" value="'+val(ed.goal.text)+'" placeholder="例: ワールドを VRChat に公開する">');
   h+='<div class="grid2">'+fld('期限','<input type="date" data-f="goal.due" value="'+val(ed.goal.due)+'">')+
@@ -1013,19 +1043,15 @@ function renderPlan(){
   h+='<div class="grid2">'+fld('色','<input type="color" data-f="color" value="'+val(ed.color||'#8d97ab')+'">')+'<div></div></div>';
   h+=fld('出しやすいブロック（置くときに先頭に並ぶ）','<div class="chips">'+BLOCK_LABELS.map(l=>
        '<label class="chip"><input type="checkbox" data-f="blocks" value="'+val(l)+'" '+(ed.blocks.indexOf(l)>=0?'checked':'')+'>'+esc(l)+'</label>').join('')+'</div>');
-  h+='<div class="sec">工程（中）と 1手の型（小）</div>';
-  ed.stages.forEach((s,si)=>{ h+=stageEditor(s,si); });
-  h+='<button class="add" data-ed-op="stage-add">＋ 工程を追加</button>';
-  h+='<div class="edfoot">'+(edErr?'<div class="err">'+esc(edErr)+'</div>':'')+
-     '<button class="btn pri" data-ed-op="save">保存</button>'+
-     '<button class="btn" data-ed-op="archive">'+(ed.archived?'アーカイブから戻す':'アーカイブ')+'</button></div>';
-  document.getElementById('plan-body').innerHTML=h;
+  return h+'</details>';
 }
+/* 中（工程）の段: 工程の名前・期日・完了条件と、その下の 小（1 手の型） */
 function stageEditor(s,si){
   let h='<div class="stage'+(s.doneAt?' done':'')+'">';
-  h+='<div class="srow"><input type="text" data-f="s:'+si+':name" value="'+val(s.name)+'" placeholder="工程の名前（例: ブロックアウト）">'+
-     '<button class="mini" data-ed-op="stage-up:'+si+'" aria-label="上へ">↑</button>'+
-     '<button class="mini" data-ed-op="stage-down:'+si+'" aria-label="下へ">↓</button>'+
+  h+='<label class="f" style="margin-top:0">工程の名前</label>';
+  h+='<div class="srow"><input type="text" data-f="s:'+si+':name" value="'+val(s.name)+'" placeholder="例: ブロックアウト">'+
+     '<button class="mini" data-ed-op="stage-up:'+si+'" aria-label="前の工程と入れ替える">↑</button>'+
+     '<button class="mini" data-ed-op="stage-down:'+si+'" aria-label="後の工程と入れ替える">↓</button>'+
      '<button class="mini" data-ed-op="stage-del:'+si+'" aria-label="工程を削除">×</button></div>';
   h+=fld('期日（空 = 期日のない継続の練習）','<input type="date" data-f="s:'+si+':due" value="'+val(s.due)+'">');
   if(s.due){
@@ -1038,12 +1064,14 @@ function stageEditor(s,si){
          '<button class="mini" data-ed-op="stage-done:'+si+'">完了にする</button></div>';
     }
   }
+  h+='</div><div class="sec">小 · 1手の型</div>';
   s.presets.forEach((x,xi)=>{
     h+='<div class="prow"><input type="text" data-f="x:'+si+':'+xi+':text" value="'+val(x.text)+'" placeholder="身体が始められる動作で、量は1">'+
        '<input type="number" min="1" max="240" data-f="x:'+si+':'+xi+':min" value="'+val(x.min)+'"><span class="rmin">分</span>'+
        '<button class="mini" data-ed-op="preset-del:'+si+':'+xi+'" aria-label="型を削除">×</button></div>';
   });
-  h+='<button class="add small" data-ed-op="preset-add:'+si+'">＋ 型を追加</button></div>';
+  if(!s.presets.length) h+='<div class="empty">型がありません</div>';
+  h+='<button class="add small" data-ed-op="preset-add:'+si+'">＋ 型を追加</button>';
   return h;
 }
 /* 入力は ed に写すだけ（再描画するとフォーカスが外れるため） */
@@ -1068,23 +1096,26 @@ function onPlanInput(e){
 planEl.addEventListener('input', onPlanInput);
 planEl.addEventListener('change', onPlanInput);
 
+/* 直すべき場所を返す。工程の中の問題なら si を付け、保存を押した段から工程の段へ連れて行く */
 function validateEd(){
-  if(!String(ed.name).trim()) return '名前を入れてください';
-  if(!ed.stages.length) return '工程を1つ以上作ってください';
-  for(const s of ed.stages){
-    if(!String(s.name).trim()) return '名前の無い工程があります';
-    if(!s.presets.length) return '「'+s.name+'」に型がありません';
+  if(!String(ed.name).trim()) return {msg:'名前を入れてください（プロジェクトの設定）', si:null};
+  if(!ed.stages.length) return {msg:'工程を1つ以上作ってください', si:null};
+  for(let si=0; si<ed.stages.length; si++){
+    const s=ed.stages[si];
+    if(!String(s.name).trim()) return {msg:'工程の名前を入れてください', si};
+    if(!s.presets.length) return {msg:'「'+s.name+'」に型がありません', si};
     for(const x of s.presets){
-      if(!String(x.text).trim()) return '「'+s.name+'」に文言の無い型があります';
-      if(!(x.min>=1 && x.min<=240)) return '「'+String(x.text).slice(0,12)+'」の分数は 1〜240 で';
+      if(!String(x.text).trim()) return {msg:'「'+s.name+'」に文言の無い型があります', si};
+      if(!(x.min>=1 && x.min<=240)) return {msg:'「'+String(x.text).slice(0,12)+'」の分数は 1〜240 で', si};
     }
   }
-  return '';
+  return null;
 }
 async function savePlanEdit(){
   if(!cfg.token){ edErr='設定からトークンを入れてください'; renderPlan(); return; }
-  edErr=validateEd();
-  if(edErr){ renderPlan(); return; }
+  const bad=validateEd();
+  if(bad){ es=bad.si; edErr=bad.msg; renderPlan(); return; }   // 名前が空ならプロジェクトの設定は開いた状態で出る
+  edErr='';
   const copy=JSON.parse(JSON.stringify(ed));
   copy.name=copy.name.trim();
   copy.goal.text=String(copy.goal.text||'').trim();
@@ -1101,7 +1132,7 @@ async function savePlanEdit(){
     shaProjects=await ghPut('projects.json', JSON.stringify(projects,null,2)+'\n', shaProjects, 'projects: 計画を更新（'+copy.name+'）');
     cacheLocal();
     setStatus('計画を保存しました（'+copy.name+'）');
-    ed=null; edErr=''; renderPlan(); render();
+    ed=null; es=null; edErr=''; renderPlan(); render();
   }catch(e){
     if(i>=0) list[i]=orig; else list.pop();
     edErr=e.conflict?'他の端末で計画が更新されています。閉じて再読み込みしてから、もう一度直してください':e.message;
@@ -1113,22 +1144,27 @@ planEl.addEventListener('click', function(e){
   const open=e.target.closest('[data-ed]');
   if(open){ const p=projList().find(x=>x.id===open.dataset.ed); if(p){ ed=JSON.parse(JSON.stringify(p)); edErr='';
     ed.goal=ed.goal||{text:'',due:null}; ed.weekly=ed.weekly||{min:0,count:0}; ed.blocks=ed.blocks||[]; ed.stages=ed.stages||[];
-    renderPlan(); planEl.querySelector('.panel').scrollTop=0; } return; }
+    edOrig=JSON.stringify(ed); edGo(null); } return; }
   if(e.target.closest('[data-ed-new]')){
     ed={id:uid(), name:'', color:'#8d97ab', blocks:[], start:ymd(new Date()), archived:false,
-        goal:{text:'',due:null}, weekly:{min:0,count:0}, stages:[newStage()]};
-    edErr=''; renderPlan(); return;
+        goal:{text:'',due:null}, weekly:{min:0,count:0}, stages:[]};
+    edOrig=''; edGo(null); return;
   }
   const b=e.target.closest('[data-ed-op]'); if(!b || !ed) return;
   const p=b.dataset.edOp.split(':'), op=p[0], si=Number(p[1]), xi=Number(p[2]);
   const S=ed.stages;
-  if(op==='back'){ ed=null; edErr=''; renderPlan(); return; }
+  if(op==='back'){
+    if(edChanged() && !confirm('保存していない変更があります。捨てて一覧に戻りますか？')) return;
+    ed=null; es=null; edErr=''; renderPlan(); return;
+  }
+  if(op==='proj'){ edGo(null); return; }
+  if(op==='stage-open'){ edGo(si); return; }
   if(op==='save'){ savePlanEdit(); return; }
   if(op==='archive'){ ed.archived=!ed.archived; savePlanEdit(); return; }
-  if(op==='stage-add') S.push(newStage());
-  else if(op==='stage-up' && si>0){ const t=S[si]; S[si]=S[si-1]; S[si-1]=t; }
-  else if(op==='stage-down' && si<S.length-1){ const t=S[si]; S[si]=S[si+1]; S[si+1]=t; }
-  else if(op==='stage-del'){ if(!confirm('工程「'+(S[si].name||'（名前なし）')+'」を削除しますか？\n過去の1手はプロジェクトの記録としては残ります')) return; S.splice(si,1); }
+  if(op==='stage-add'){ S.push(newStage()); edGo(S.length-1); return; }
+  else if(op==='stage-up' && si>0){ const t=S[si]; S[si]=S[si-1]; S[si-1]=t; es=si-1; }
+  else if(op==='stage-down' && si<S.length-1){ const t=S[si]; S[si]=S[si+1]; S[si+1]=t; es=si+1; }
+  else if(op==='stage-del'){ if(!confirm('工程「'+(S[si].name||'（名前なし）')+'」を削除しますか？\n過去の1手はプロジェクトの記録としては残ります')) return; S.splice(si,1); edGo(null); return; }
   else if(op==='stage-done'){
     // 証拠が無いものは完了にしない（「理解した」「だいたいできた」で閉じないため）
     if(!String(S[si].evidence||'').trim()){ edErr='「'+S[si].name+'」の証拠を書いてから完了にしてください'; renderPlan(); return; }
