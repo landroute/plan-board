@@ -982,6 +982,9 @@ const edChanged=()=>!!ed && JSON.stringify(ed)!==edOrig;
 function edGo(si){ es=si; edErr=''; renderPlan(); planEl.querySelector('.panel').scrollTop=0; }
 const BLOCK_LABELS=(function(){ const s=[]; for(const k in BASE_SCHEDULE) for(const b of BASE_SCHEDULE[k]) if(s.indexOf(b.label)<0) s.push(b.label); return s; })();
 const val=v=>esc(v==null?'':String(v)).replace(/"/g,'&quot;');
+/* 日付欄には上限を付ける。max が無いと Chrome は年を 6 桁（275760 年まで）受け付け、
+   8 桁を続けて打つと年に 6 桁入ってしまう。上限があると年は 4 桁で止まり、月へ自動で進む */
+const DATE_IN='<input type="date" min="2000-01-01" max="9999-12-31" ';
 const fld=(label,input)=>'<div><label class="f">'+label+'</label>'+input+'</div>';
 function newStage(){ return {id:uid(), name:'', due:null, criteria:'', doneAt:null, evidence:'', presets:[newPreset()]}; }
 function newPreset(){ return {id:uid(), text:'', min:15}; }
@@ -1036,8 +1039,8 @@ function projectLevel(){
   h+='<details class="psettings"'+(ed.name?'':' open')+'><summary>プロジェクトの設定 — 名前・ゴール・期限・週の目標・色</summary>';
   h+=fld('名前','<input type="text" data-f="name" value="'+val(ed.name)+'">');
   h+=fld('ゴール（最終成果物）','<input type="text" data-f="goal.text" value="'+val(ed.goal.text)+'" placeholder="例: ワールドを VRChat に公開する">');
-  h+='<div class="grid2">'+fld('期限','<input type="date" data-f="goal.due" value="'+val(ed.goal.due)+'">')+
-     fld('始めた日','<input type="date" data-f="start" value="'+val(ed.start)+'">')+'</div>';
+  h+='<div class="grid2">'+fld('期限',DATE_IN+'data-f="goal.due" value="'+val(ed.goal.due)+'">')+
+     fld('始めた日',DATE_IN+'data-f="start" value="'+val(ed.start)+'">')+'</div>';
   h+='<div class="grid2">'+fld('週の目標（分）','<input type="number" min="0" max="3000" step="10" data-f="weekly.min" value="'+val(ed.weekly.min)+'">')+
      fld('週の目標（回）','<input type="number" min="0" max="100" step="1" data-f="weekly.count" value="'+val(ed.weekly.count)+'">')+'</div>';
   h+='<div class="grid2">'+fld('色','<input type="color" data-f="color" value="'+val(ed.color||'#8d97ab')+'">')+'<div></div></div>';
@@ -1053,7 +1056,7 @@ function stageEditor(s,si){
      '<button class="mini" data-ed-op="stage-up:'+si+'" aria-label="前の工程と入れ替える">↑</button>'+
      '<button class="mini" data-ed-op="stage-down:'+si+'" aria-label="後の工程と入れ替える">↓</button>'+
      '<button class="mini" data-ed-op="stage-del:'+si+'" aria-label="工程を削除">×</button></div>';
-  h+=fld('期日（空 = 期日のない継続の練習）','<input type="date" data-f="s:'+si+':due" value="'+val(s.due)+'">');
+  h+=fld('期日（空 = 期日のない継続の練習）',DATE_IN+'data-f="s:'+si+':due" value="'+val(s.due)+'">');
   if(s.due){
     h+=fld('完了条件（何ができたら終わりか。物理的な証拠で）','<input type="text" data-f="s:'+si+':criteria" value="'+val(s.criteria)+'">');
     if(s.doneAt){
