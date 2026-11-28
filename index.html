@@ -230,24 +230,10 @@ input[type=checkbox]{accent-color:var(--accent)}
     <input type="text" id="cfg-repo" placeholder="landroute/plan-data">
     <label class="f">GitHub トークン（fine-grained・plan-data のみ・Contents: Read and write）</label>
     <input type="password" id="cfg-token" placeholder="github_pat_...">
-    <label class="f">ntfy トピック（予告通知。空なら通知しない）</label>
-    <input type="text" id="cfg-ntfy" placeholder="長いランダム文字列">
-    <label class="f">何分前に鳴らすか</label>
-    <input type="number" id="cfg-before" value="5" min="1" max="60" step="1" style="width:110px">
-    <label class="row" style="cursor:pointer;margin-top:10px">
-      <input type="checkbox" id="cfg-include" style="width:auto;flex:none">
-      <div class="rtxt">通知にタスク本文を載せる</div>
-    </label>
     <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap">
       <button class="btn pri" id="cfg-save">保存して読み込む</button>
-      <button class="btn" id="cfg-test">テスト通知</button>
       <button class="btn" id="cfg-clear">トークンを消す</button>
     </div>
-    <p class="hint">
-      ntfy.sh は第三者の公開サーバで、<b>トピック名を知っていれば誰でも購読できます</b>。
-      既定ではブロック名だけを送り、タスク本文は載せません。
-      トピックは推測されない長いランダム文字列にしてください。
-    </p>
     <p class="hint">
       トークンはこの端末のブラウザ内（localStorage）にのみ保存されます。
       <b>権限は plan-data だけ</b>に絞ってください。claude-tools には触れない設定にすること。
@@ -308,7 +294,7 @@ const uid = () => Math.random().toString(36).slice(2,9);
 
 /* ---------- 設定 ---------- */
 const CFG_KEY='board.cfg', CACHE_KEY='board.cache';
-let cfg = { repo:'landroute/plan-data', token:'', ntfy:'' };
+let cfg = { repo:'landroute/plan-data', token:'' };
 try{ Object.assign(cfg, JSON.parse(localStorage.getItem(CFG_KEY)||'{}')); }catch(e){}
 function saveCfg(){ try{ localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); }catch(e){} }
 
@@ -705,8 +691,6 @@ async function save(){
     }
     cacheLocal();
     setStatus('保存済み '+new Date().toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'}));
-    await syncNotifications();
-    if(dirty) setTimeout(save, 200);   // 予約IDが付いたので、もう一度だけ保存する
   }catch(e){
     if(e.conflict) setStatus('他の端末で更新されています。再読み込みしてください', true);
     else setStatus(e.message, true);
@@ -785,62 +769,20 @@ async function applyEstimate(presetId, minutes){
   renderPlaceSheet();
 }
 
-/* ---------- ntfy（予告の予約） ----------
-   板から直接予約するので、Surface が落ちていても鳴る。
-   予定が変わったら DELETE して貼り直す（ntfy は上限3日） */
-async function ntfyPublish(body){
-  const r=await fetch('https://ntfy.sh/', {
-    method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
+/* ---------- 予告通知（ntfy）の後始末 ----------
+   2026-11-27 に予告通知をやめた。公開サーバ ntfy.sh のトピックは、名前を知っていれば
+   誰でも送れて読めるため（スマホに身元不明の通知が届いた）。この版は ntfy に一切つながない。
+   前の版が残したもの（この端末のトピックと、plan.json の予約の記録）を消すだけ。
+   すでに予約された予告は ntfy のサーバに残るが、スマホで購読を外せば届かない */
+function retireNtfy(){
+  let cfgChanged=false;
+  ['ntfy','notifyBefore','notifyIncludeTask'].forEach(function(k){
+    if(k in cfg){ delete cfg[k]; cfgChanged=true; }
   });
-  if(!r.ok) throw new Error('ntfy: HTTP '+r.status);
-  return r.json();
-}
-function ntfyDelete(id){
-  return fetch('https://ntfy.sh/'+encodeURIComponent(cfg.ntfy)+'/'+encodeURIComponent(id)+'/delete')
-    .catch(function(){});
-}
-function notifyFingerprint(){
-  const parts=[];
-  for(let off=0; off<3; off++){
-    const key=ymd(dateAt(off));
-    const bs=blocksFor(off);
-    for(let i=0;i<bs.length;i++){
-      const open=bs[i].tasks.find(function(t){return !t.done;});
-      if(open) parts.push(key+'|'+bs[i].label+'|'+bs[i].s+'|'+open.text);
-    }
+  if(cfgChanged) saveCfg();
+  if(plan && ('notify' in plan || 'notifyFp' in plan)){
+    delete plan.notify; delete plan.notifyFp; dirty=true;
   }
-  return parts.join('~')+'|'+(cfg.notifyBefore||5)+'|'+(cfg.notifyIncludeTask?1:0);
-}
-async function syncNotifications(){
-  if(!cfg.ntfy) return;
-  const fp=notifyFingerprint();
-  if(fp===(plan.notifyFp||'')) return;
-  const old=plan.notify||[];
-  for(let i=0;i<old.length;i++) await ntfyDelete(old[i].id);
-  const made=[], before=Number(cfg.notifyBefore||5), now=Date.now();
-  for(let off=0; off<3; off++){
-    const d=dateAt(off), bs=blocksFor(off);
-    for(let i=0;i<bs.length;i++){
-      const b=bs[i];
-      const open=b.tasks.find(function(t){return !t.done;});
-      if(!open) continue;
-      const fire=new Date(d); fire.setHours(0,0,0,0); fire.setMinutes(hm(b.s)-before);
-      if(fire.getTime()<=now+15000) continue;                  // 過ぎている / 直近すぎる
-      if(fire.getTime()>now+3*86400000-60000) continue;        // ntfy の上限3日
-      try{
-        const res=await ntfyPublish({
-          topic:cfg.ntfy,
-          title:'もうすぐ '+b.label+'（'+b.s+'）',
-          message: cfg.notifyIncludeTask ? open.text+(open.note?' · '+open.note:'') : '次の1手はプランに入っています',
-          delay:String(Math.floor(fire.getTime()/1000)),
-          tags:['alarm_clock']
-        });
-        if(res && res.id) made.push({id:res.id, at:b.s, label:b.label, date:ymd(d)});
-      }catch(e){ setStatus('通知の予約に失敗: '+e.message, true); return; }
-    }
-  }
-  plan.notify=made; plan.notifyFp=fp; dirty=true;
-  setStatus('予告を '+made.length+'件 予約しました');
 }
 
 /* ---------- 読み込み ---------- */
@@ -862,8 +804,7 @@ async function loadAll(){
     if(!plan.inbox) plan.inbox=[];
     dirty=false; cacheLocal(); render();
     setStatus('同期 '+new Date().toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'}));
-    // 設定変更（何分前・本文の有無）も指紋に入っているので、ここで貼り直しが走る
-    syncNotifications().then(function(){ if(dirty) save(); });
+    retireNtfy(); if(dirty) save();
   }catch(e){
     setStatus(e.message+' — キャッシュを表示します', true);
     renderFromCache();
@@ -1231,28 +1172,13 @@ const stEl=document.getElementById('settings');
 document.getElementById('settings-btn').addEventListener('click', function(){
   document.getElementById('cfg-repo').value=cfg.repo||'';
   document.getElementById('cfg-token').value=cfg.token||'';
-  document.getElementById('cfg-ntfy').value=cfg.ntfy||'';
-  document.getElementById('cfg-before').value=cfg.notifyBefore||5;
-  document.getElementById('cfg-include').checked=!!cfg.notifyIncludeTask;
   stEl.hidden=false;
-});
-document.getElementById('cfg-test').addEventListener('click', async function(){
-  const topic=document.getElementById('cfg-ntfy').value.trim();
-  if(!topic){ setStatus('先に ntfy トピックを入れてください', true); return; }
-  try{
-    await ntfyPublish({topic:topic, title:'板 — テスト通知', message:'この通知が届けば設定できています', tags:['white_check_mark']});
-    setStatus('テスト通知を送りました');
-  }catch(e){ setStatus(e.message, true); }
-  stEl.hidden=true;
 });
 document.getElementById('settings-close').addEventListener('click', function(){ stEl.hidden=true; });
 stEl.addEventListener('click', function(e){ if(e.target.id==='settings') stEl.hidden=true; });
 document.getElementById('cfg-save').addEventListener('click', function(){
   cfg.repo=document.getElementById('cfg-repo').value.trim()||'landroute/plan-data';
   cfg.token=document.getElementById('cfg-token').value.trim();
-  cfg.ntfy=document.getElementById('cfg-ntfy').value.trim();
-  cfg.notifyBefore=Math.max(1,Math.min(60,Number(document.getElementById('cfg-before').value)||5));
-  cfg.notifyIncludeTask=document.getElementById('cfg-include').checked;
   saveCfg(); stEl.hidden=true; loadAll();
 });
 document.getElementById('cfg-clear').addEventListener('click', function(){
